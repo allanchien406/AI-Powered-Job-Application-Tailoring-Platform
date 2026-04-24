@@ -17,6 +17,11 @@ export class InfraStack extends cdk.Stack {
 
     const api = new HttpApi(this, "ProfileServiceApi", {
       apiName: "profileservice-http-api",
+      corsPreflight: {
+        allowHeaders: ["*"],
+        allowMethods: [cdk.aws_apigatewayv2.CorsHttpMethod.ANY],
+        allowOrigins: ["*"],
+      },
     });
 
     api.addRoutes({
