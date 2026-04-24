@@ -12,12 +12,7 @@ export class InfraStack extends cdk.Stack {
     const profileServiceHandler = new Function(this, "ProfileServiceHandler", {
       runtime: Runtime.PYTHON_3_12,
       handler: "index.handler",
-      code: Code.fromInline(`def handler(event, context):
-    return {
-        'statusCode': 200,
-        'headers': { 'content-type': 'application/json' },
-        'body': '{"message": "Profile service API is running"}'
-    }`),
+      code: Code.fromAsset("lambda/profile-service"),
     });
 
     const api = new HttpApi(this, "ProfileServiceApi", {
