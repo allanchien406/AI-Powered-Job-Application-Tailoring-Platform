@@ -84,10 +84,47 @@ To create an AI-powered career document generation system that uses structured u
    4. CV/Cover letter generate
    5. return result
 
+#### Step-1
+Use CDK to create apigateway and lambda then test it
 
+- remember dont delete the S3 bucket made form the bootstrap otherwise u need to delete the CDKToolkit stack and bootstrap again
 
+```
+> curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile"
+{"message": "Profile service API is running"}%  
+```
+this show that the apigateway and lambda is successfully running!
 
+- i have done some update for the stack code, so now the lambda code is not use 
+Code.formInline but Code.fromAsset, and it turn out that the cloudformation will put the lambda in the zip and in a default bucket
 
+```
+ProfileServiceHandler4430D52F:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket:
+          Fn::Sub: cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}
+        S3Key: d0ec76d1f190c9fdca3600e82a628d9b7eabbee7ca98041fa28f10fe43b79ddb.zip
+      Handler: index.handler
+```
+- alright i make the lambda took json data and echo back
+
+```
+curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_name": "Allan Chien",
+    "email": "allan@example.com",
+    "skills": ["AWS", "Python", "Docker"],
+    "projects": [
+      {
+        "name": "Stock Market Real-Time Data Analytics Pipeline on AWS"
+      }
+    ]
+  }'
+{"message": "Profile received successfully", "received_profile": {"full_name": "Allan Chien", "email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "projects": [{"name": "Stock Market Real-Time Data Analytics Pipeline on AWS"}]}}%   
+```
 
 
 --- 
