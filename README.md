@@ -84,8 +84,8 @@ To create an AI-powered career document generation system that uses structured u
    4. CV/Cover letter generate
    5. return result
 
-#### Step-1
-Use CDK to create apigateway and lambda then test it
+#### Step-1: Fundation setup with CDK
+Use CDK to create apigateway and lambda LaC then test it
 
 - remember dont delete the S3 bucket made form the bootstrap otherwise u need to delete the CDKToolkit stack and bootstrap again
 
@@ -125,6 +125,61 @@ curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile" \
   }'
 {"message": "Profile received successfully", "received_profile": {"full_name": "Allan Chien", "email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "projects": [{"name": "Stock Market Real-Time Data Analytics Pipeline on AWS"}]}}%   
 ```
+#### Step-2: RDS implement
+![MVP Architecture Diagram](Image/MVP-Archeticture-Step2.png)
+
+Implement the architecture using CDK
+##### 2.1: Implemment lambda profile service backend logic
+
+ Now the Python code should move from echo test handler to real profile-service backend logic.
+
+- remember to install necessary package for example 
+```
+import psycopg
+```
+with 
+```
+cd infra/lambda/profile-service
+pip install --target . 'psycopg[binary]'
+```
+
+this is because  AWS Lambda does not come with psycopg preinstalled.
+
+- okay lambda funcion erro form cloudwatch log, this is probally issue with psycopg
+```
+[ERROR] Runtime.ImportModuleError: Unable to import module 'index': no pq wrapper available.
+Attempts made:
+- couldn't import psycopg 'c' implementation: No module named 'psycopg_c'
+- couldn't import psycopg 'binary' implementation: cannot import name 'pq' from 'psycopg_binary' (/var/task/psycopg_binary/__init__.py)
+- couldn't import psycopg 'python' implementation: libpq library not found
+Traceback (most recent call last):
+```
+need to fix it
+
+now I have try 
+```
+import pg8000
+```
+but I think the problem is Lambda cannot reach Secrets Manager from the isolated subnet, so i probally need a redesign of the architecture
+
+![MVP Architecture Diagram](Image/MVP-Archeticture-Step2.1.png)
+
+so use an enterface endpoint to connect the instances in the private subnet to the public aws service
+
+```
+> curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_name": "Allan Chien",
+    "email": "allan@example.com",
+    "skills": ["AWS", "Python", "Docker"]
+  }'
+
+{"message": "Profile saved successfully", "profile_id": 1, "email": "allan@example.com"}%                                                                             
+```
+ok now the implemntion is good
+
+
 
 
 --- 
