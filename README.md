@@ -178,6 +178,12 @@ so use an enterface endpoint to connect the instances in the private subnet to t
 {"message": "Profile saved successfully", "profile_id": 1, "email": "allan@example.com"}%                                                                             
 ```
 ok now the implemntion is good
+Now i need to find a way to connet to the RDS to verify data table 
+so i have sucessfully add a GET endpoint and verify data in RDS
+```
+> curl "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile?email=allan@example.com"
+{"profile_id": 1, "email": "allan@example.com", "full_name": "Allan Chien", "profile_data": {"email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "full_name": "Allan Chien"}}%                                 
+```
 
 
 

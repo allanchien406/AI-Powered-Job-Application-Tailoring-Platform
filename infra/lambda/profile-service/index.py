@@ -79,35 +79,77 @@ def save_profile(conn, email, full_name, profile_data):
     return profile_id
 
 
+def get_profile_by_email(conn, email):
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, email, full_name, profile_data
+        FROM profiles
+        WHERE email = %s;
+        """,
+        (email,),
+    )
+    row = cur.fetchone()
+    cur.close()
+
+    if not row:
+        return None
+
+    return {
+        "profile_id": row[0],
+        "email": row[1],
+        "full_name": row[2],
+        "profile_data": row[3],
+    }
+
 
 def handler(event, context):
     try:
-        body = event.get("body")
-        data = json.loads(body) if body else {}
-
-        email = data.get("email")
-        full_name = data.get("full_name")
-
-        if not email:
-            return response(400, {"error": "email is required"})
+        http_method = event.get("requestContext", {}).get("http", {}).get("method")
 
         credentials = get_db_credentials()
-
         conn = get_db_connection(credentials)
         try:
             create_profiles_table(conn)
-            profile_id = save_profile(conn, email, full_name, data)
+
+            if http_method == "GET":
+                query_params = event.get("queryStringParameters") or {}
+                email = query_params.get("email")
+
+                if not email:
+                    return response(400, {"error": "email query parameter is required"})
+
+                profile = get_profile_by_email(conn, email)
+
+                if not profile:
+                    return response(404, {"error": "Profile not found"})
+
+                return response(200, profile)
+
+            if http_method == "PUT":
+                body = event.get("body")
+                data = json.loads(body) if body else {}
+
+                email = data.get("email")
+                full_name = data.get("full_name")
+
+                if not email:
+                    return response(400, {"error": "email is required"})
+
+                profile_id = save_profile(conn, email, full_name, data)
+
+                return response(
+                    200,
+                    {
+                        "message": "Profile saved successfully",
+                        "profile_id": profile_id,
+                        "email": email,
+                    },
+                )
+
+            return response(405, {"error": f"Method {http_method} not allowed"})
         finally:
             conn.close()
-
-        return response(
-            200,
-            {
-                "message": "Profile saved successfully",
-                "profile_id": profile_id,
-                "email": email,
-            },
-        )
 
     except json.JSONDecodeError:
         return response(400, {"error": "Invalid JSON body"})

@@ -129,7 +129,10 @@ export class InfraStack extends cdk.Stack {
 
     api.addRoutes({
       path: "/profile",
-      methods: [cdk.aws_apigatewayv2.HttpMethod.PUT],
+      methods: [
+        cdk.aws_apigatewayv2.HttpMethod.GET,
+        cdk.aws_apigatewayv2.HttpMethod.PUT,
+      ],
       integration: new HttpLambdaIntegration(
         "ProfileServiceHandlerIntegration",
         profileServiceHandler,
