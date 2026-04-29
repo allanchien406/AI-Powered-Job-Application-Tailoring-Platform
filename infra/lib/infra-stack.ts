@@ -76,7 +76,7 @@ export class InfraStack extends cdk.Stack {
       },
       securityGroups: [databaseSecurityGroup],
       engine: rds.DatabaseInstanceEngine.postgres({
-        version: rds.PostgresEngineVersion.VER_16_3,
+        version: rds.PostgresEngineVersion.VER_16_6,
       }),
       instanceType: ec2.InstanceType.of(
         ec2.InstanceClass.T3, 
