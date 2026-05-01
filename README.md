@@ -185,6 +185,22 @@ so i have sucessfully add a GET endpoint and verify data in RDS
 {"profile_id": 1, "email": "allan@example.com", "full_name": "Allan Chien", "profile_data": {"email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "full_name": "Allan Chien"}}%                                 
 ```
 
+##### 2.2:     Add job description endpoint
+```
+> curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/job-description" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "company_name": "Catalyst Cloud",
+    "job_title": "Junior DevOps Engineer",
+    "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."
+  }'
+{"message": "Job description saved successfully", "job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer"}%   
+
+ curl "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/job-description?job_id=1"
+{"job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer", "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."}%     
+```
+
+
 
 
 
