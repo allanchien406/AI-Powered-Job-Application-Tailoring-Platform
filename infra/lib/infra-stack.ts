@@ -145,8 +145,31 @@ export class InfraStack extends cdk.Stack {
       },
     );
 
+    const tailoringServiceHandler = new Function(
+      this,
+      "TailoringServiceHandler",
+      {
+        runtime: Runtime.PYTHON_3_12,
+        handler: "index.handler",
+        code: Code.fromAsset("lambda/tailoring-service"),
+        vpc,
+        vpcSubnets: {
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+        },
+        timeout: cdk.Duration.seconds(10),
+        securityGroups: [lambdaSecurityGroup],
+        environment: {
+          DB_HOST: rdsInstance.dbInstanceEndpointAddress,
+          DB_PORT: rdsInstance.dbInstanceEndpointPort,
+          DB_NAME: "jobtailor",
+          DB_SECRET_ARN: rdsInstance.secret?.secretArn || "",
+        },
+      },
+    );
+
     rdsInstance.secret?.grantRead(profileServiceHandler); // Grant the Lambda function permission to read the RDS secret for database credentials
     rdsInstance.secret?.grantRead(jobDescriptionServiceHandler); // Grant the Lambda function permission to read the RDS secret for database credentials
+    rdsInstance.secret?.grantRead(tailoringServiceHandler);
 
     // Create the HTTP API Gateway and integrate it with the Lambda function
     const api = new HttpApi(this, "ProfileServiceApi", {
@@ -179,6 +202,15 @@ export class InfraStack extends cdk.Stack {
       integration: new HttpLambdaIntegration(
         "JobDescriptionHandlerIntegration",
         jobDescriptionServiceHandler,
+      ),
+    });
+
+    api.addRoutes({
+      path: "/tailor-preview",
+      methods: [cdk.aws_apigatewayv2.HttpMethod.POST],
+      integration: new HttpLambdaIntegration(
+        "TailoringServiceHandlerIntegration",
+        tailoringServiceHandler,
       ),
     });
 
