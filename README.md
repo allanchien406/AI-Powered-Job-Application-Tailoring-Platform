@@ -185,7 +185,7 @@ so i have sucessfully add a GET endpoint and verify data in RDS
 {"profile_id": 1, "email": "allan@example.com", "full_name": "Allan Chien", "profile_data": {"email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "full_name": "Allan Chien"}}%                                 
 ```
 
-##### 2.2:     Add job description endpoint
+##### 2.2: Add job description endpoint
 ```
 > curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/job-description" \
   -H "Content-Type: application/json" \
@@ -201,7 +201,14 @@ so i have sucessfully add a GET endpoint and verify data in RDS
 ```
 
 
-
+#### Step-3: AI service implemet 
+##### 3.1: Add tailoring Lambda
+1. get email and job_id
+2. read profile row
+3. read job description row
+4. extract requirements from raw_description
+5. score profile skills/projects
+6. return matched context
 
 
 --- 
