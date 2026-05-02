@@ -13,6 +13,56 @@ def response(status_code, body):
     }
 
 
+def normalize_string_list(values):
+    if not isinstance(values, list):
+        return []
+
+    normalized_values = []
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            normalized_values.append(value.strip())
+
+    return normalized_values
+
+
+def normalize_entry_list(values, required_keys):
+    if not isinstance(values, list):
+        return []
+
+    normalized_values = []
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+
+        normalized_entry = {}
+        for key in required_keys:
+            entry_value = value.get(key)
+            if isinstance(entry_value, str):
+                normalized_entry[key] = entry_value.strip()
+            else:
+                normalized_entry[key] = ""
+
+        if not any(normalized_entry.values()):
+            continue
+
+        normalized_values.append(normalized_entry)
+
+    return normalized_values
+
+
+def normalize_profile_payload(data):
+    email = data.get("email")
+    full_name = data.get("full_name")
+
+    return {
+        "full_name": full_name.strip() if isinstance(full_name, str) else "",
+        "email": email.strip().lower() if isinstance(email, str) else "",
+        "skills": normalize_string_list(data.get("skills")),
+        "projects": normalize_entry_list(data.get("projects"), ["name", "description"]),
+        "experience": normalize_entry_list(data.get("experience"), ["title", "description"]),
+    }
+
+
 
 def get_db_credentials():
     secret_arn = os.environ["DB_SECRET_ARN"]
@@ -95,12 +145,12 @@ def get_profile_by_email(conn, email):
     if not row:
         return None
 
-    return {
-        "profile_id": row[0],
-        "email": row[1],
-        "full_name": row[2],
-        "profile_data": row[3],
-    }
+    profile_data = row[3] if isinstance(row[3], dict) else {}
+    normalized_profile = normalize_profile_payload(profile_data)
+    normalized_profile["email"] = row[1]
+    normalized_profile["full_name"] = row[2] or normalized_profile["full_name"]
+
+    return {"profile_id": row[0], **normalized_profile}
 
 
 
@@ -132,20 +182,21 @@ def handler(event, context):
                 body = event.get("body")
                 data = json.loads(body) if body else {}
 
-                email = data.get("email")
-                full_name = data.get("full_name")
+                normalized_profile = normalize_profile_payload(data)
+                email = normalized_profile["email"]
+                full_name = normalized_profile["full_name"]
 
                 if not email:
                     return response(400, {"error": "email is required"})
 
-                profile_id = save_profile(conn, email, full_name, data)
+                profile_id = save_profile(conn, email, full_name, normalized_profile)
 
                 return response(
                     200,
                     {
                         "message": "Profile saved successfully",
                         "profile_id": profile_id,
-                        "email": email,
+                        **normalized_profile,
                     },
                 )
 
