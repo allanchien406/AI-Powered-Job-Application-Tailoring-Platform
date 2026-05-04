@@ -17,46 +17,57 @@ export class InfraStack extends cdk.Stack {
         {
           name: "PublicSubnet",
           subnetType: ec2.SubnetType.PUBLIC,
-          
         },
         {
           name: "PrivateSubnet",
           subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-          
         },
       ],
     });
 
-    const lambdaSecurityGroup = new ec2.SecurityGroup(this, "LambdaSecurityGroup", {
-      vpc,
-      description: "Security group for profile service Lambda function to access RDS",
-      allowAllOutbound: true,
-    });
+    const lambdaSecurityGroup = new ec2.SecurityGroup(
+      this,
+      "LambdaSecurityGroup",
+      {
+        vpc,
+        description:
+          "Security group for profile service Lambda function to access RDS",
+        allowAllOutbound: true,
+      },
+    );
 
-    
-    const databaseSecurityGroup = new ec2.SecurityGroup(this, "DatabaseSecurityGroup", {
-      vpc,
-      description: "Security group for RDS instance to allow access from Lambda",
-      allowAllOutbound: true,
-    });
+    const databaseSecurityGroup = new ec2.SecurityGroup(
+      this,
+      "DatabaseSecurityGroup",
+      {
+        vpc,
+        description:
+          "Security group for RDS instance to allow access from Lambda",
+        allowAllOutbound: true,
+      },
+    );
 
     databaseSecurityGroup.addIngressRule(
       lambdaSecurityGroup,
       ec2.Port.tcp(5432),
-      "Allow Lambda to access RDS on port 5432"
+      "Allow Lambda to access RDS on port 5432",
     );
 
+    const secretsManagerEndpointSecurityGroup = new ec2.SecurityGroup(
+      this,
+      "SecretsManagerEndpointSecurityGroup",
+      {
+        vpc,
+        description:
+          "Security group for Secrets Manager VPC endpoint to allow access from Lambda",
+        allowAllOutbound: true,
+      },
+    );
 
-    const secretsManagerEndpointSecurityGroup = new ec2.SecurityGroup(this, "SecretsManagerEndpointSecurityGroup", {
-      vpc,
-      description: "Security group for Secrets Manager VPC endpoint to allow access from Lambda",
-      allowAllOutbound: true,
-    });
-    
     secretsManagerEndpointSecurityGroup.addIngressRule(
       lambdaSecurityGroup,
       ec2.Port.tcp(443),
-      "Allow Lambda to access Secrets Manager VPC endpoint on port 443"
+      "Allow Lambda to access Secrets Manager VPC endpoint on port 443",
     );
 
     vpc.addInterfaceEndpoint("SecretsManagerEndpoint", {
@@ -68,7 +79,6 @@ export class InfraStack extends cdk.Stack {
       privateDnsEnabled: true,
     });
 
-
     const rdsInstance = new rds.DatabaseInstance(this, "ProfileDatabase", {
       vpc,
       vpcSubnets: {
@@ -76,13 +86,13 @@ export class InfraStack extends cdk.Stack {
       },
       securityGroups: [databaseSecurityGroup],
       engine: rds.DatabaseInstanceEngine.postgres({
-        version: rds.PostgresEngineVersion.VER_16_3,
+        version: rds.PostgresEngineVersion.VER_16_6,
       }),
       instanceType: ec2.InstanceType.of(
-        ec2.InstanceClass.T3, 
+        ec2.InstanceClass.T3,
         ec2.InstanceSize.MICRO,
       ),
-      
+
       credentials: rds.Credentials.fromGeneratedSecret("postgres"), // Auto-generate a secret for the database credentials
       databaseName: "jobtailor",
       allocatedStorage: 20,
@@ -92,9 +102,7 @@ export class InfraStack extends cdk.Stack {
       deletionProtection: false,
       removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT recommended for production environments
       deleteAutomatedBackups: true,
-
     });
-
 
     // Create the Lambda function for the profile service
     const profileServiceHandler = new Function(this, "ProfileServiceHandler", {
@@ -111,13 +119,59 @@ export class InfraStack extends cdk.Stack {
         DB_HOST: rdsInstance.dbInstanceEndpointAddress,
         DB_PORT: rdsInstance.dbInstanceEndpointPort,
         DB_NAME: "jobtailor",
-        DB_SECRET_ARN: rdsInstance.secret?.secretArn || "",// Pass the RDS secret ARN to the Lambda function for secure access to database credentials
+        DB_SECRET_ARN: rdsInstance.secret?.secretArn || "", // Pass the RDS secret ARN to the Lambda function for secure access to database credentials
       },
     });
 
-      rdsInstance.secret?.grantRead(profileServiceHandler);// Grant the Lambda function permission to read the RDS secret for database credentials
+    const jobDescriptionServiceHandler = new Function(
+      this,
+      "JobDescriptionServiceHandler",
+      {
+        runtime: Runtime.PYTHON_3_12,
+        handler: "index.handler",
+        code: Code.fromAsset("lambda/job-service"),
+        vpc,
+        vpcSubnets: {
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+        },
+        timeout: cdk.Duration.seconds(10),
+        securityGroups: [lambdaSecurityGroup],
+        environment: {
+          DB_HOST: rdsInstance.dbInstanceEndpointAddress,
+          DB_PORT: rdsInstance.dbInstanceEndpointPort,
+          DB_NAME: "jobtailor",
+          DB_SECRET_ARN: rdsInstance.secret?.secretArn || "",
+        },
+      },
+    );
 
+    const tailoringServiceHandler = new Function(
+      this,
+      "TailoringServiceHandler",
+      {
+        runtime: Runtime.PYTHON_3_12,
+        handler: "index.handler",
+        code: Code.fromAsset("lambda/tailoring-service"),
+        vpc,
+        vpcSubnets: {
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+        },
+        timeout: cdk.Duration.seconds(10),
+        securityGroups: [lambdaSecurityGroup],
+        environment: {
+          DB_HOST: rdsInstance.dbInstanceEndpointAddress,
+          DB_PORT: rdsInstance.dbInstanceEndpointPort,
+          DB_NAME: "jobtailor",
+          DB_SECRET_ARN: rdsInstance.secret?.secretArn || "",
+        },
+      },
+    );
 
+    rdsInstance.secret?.grantRead(profileServiceHandler); // Grant the Lambda function permission to read the RDS secret for database credentials
+    rdsInstance.secret?.grantRead(jobDescriptionServiceHandler); // Grant the Lambda function permission to read the RDS secret for database credentials
+    rdsInstance.secret?.grantRead(tailoringServiceHandler);
+
+    // Create the HTTP API Gateway and integrate it with the Lambda function
     const api = new HttpApi(this, "ProfileServiceApi", {
       apiName: "profileservice-http-api",
       corsPreflight: {
@@ -129,10 +183,34 @@ export class InfraStack extends cdk.Stack {
 
     api.addRoutes({
       path: "/profile",
-      methods: [cdk.aws_apigatewayv2.HttpMethod.PUT],
+      methods: [
+        cdk.aws_apigatewayv2.HttpMethod.GET,
+        cdk.aws_apigatewayv2.HttpMethod.PUT,
+      ],
       integration: new HttpLambdaIntegration(
         "ProfileServiceHandlerIntegration",
         profileServiceHandler,
+      ),
+    });
+
+    api.addRoutes({
+      path: "/job-description",
+      methods: [
+        cdk.aws_apigatewayv2.HttpMethod.GET,
+        cdk.aws_apigatewayv2.HttpMethod.PUT,
+      ],
+      integration: new HttpLambdaIntegration(
+        "JobDescriptionHandlerIntegration",
+        jobDescriptionServiceHandler,
+      ),
+    });
+
+    api.addRoutes({
+      path: "/tailor-preview",
+      methods: [cdk.aws_apigatewayv2.HttpMethod.POST],
+      integration: new HttpLambdaIntegration(
+        "TailoringServiceHandlerIntegration",
+        tailoringServiceHandler,
       ),
     });
 

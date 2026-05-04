@@ -178,8 +178,58 @@ so use an enterface endpoint to connect the instances in the private subnet to t
 {"message": "Profile saved successfully", "profile_id": 1, "email": "allan@example.com"}%                                                                             
 ```
 ok now the implemntion is good
+Now i need to find a way to connet to the RDS to verify data table 
+so i have sucessfully add a GET endpoint and verify data in RDS
+```
+> curl "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile?email=allan@example.com"
+{"profile_id": 1, "email": "allan@example.com", "full_name": "Allan Chien", "profile_data": {"email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "full_name": "Allan Chien"}}%                                 
+```
+
+##### 2.2: Add job description endpoint
+```
+> curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/job-description" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "company_name": "Catalyst Cloud",
+    "job_title": "Junior DevOps Engineer",
+    "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."
+  }'
+{"message": "Job description saved successfully", "job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer"}%   
+
+ curl "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/job-description?job_id=1"
+{"job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer", "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."}%     
+```
 
 
+#### Step-3: AI service implemet 
+##### 3.1: Add tailoring Lambda
+1. get email and job_id
+2. read profile row
+3. read job description row
+4. extract requirements from raw_description
+5. score profile skills/projects
+6. return matched context
+
+```
+curl -X POST "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/tailor-preview" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "allan@example.com",
+    "job_id": 1
+  }'
+{"message": "Tailor preview data loaded successfully", "email": "allan@example.com", "job_id": 1, "profile": {"profile_id": 1, "email": "allan@example.com", "full_name": "Allan Chien", "profile_data": {"email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "full_name": "Allan Chien"}}, "job_description": {"job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer", "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."}, "extracted_requirements": ["aws", "linux", "ci/cd"]}%                                                                                                
+```
+now i need ot do 5. and 6.
+
+```
+ curl -X POST "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/tailor-preview" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "allan@example.com",
+    "job_id": 1
+  }'
+{"message": "Tailor preview data loaded successfully", "email": "allan@example.com", "job_id": 1, "profile": {"profile_id": 1, "email": "allan@example.com", "full_name": "Allan Chien", "profile_data": {"email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "projects": [{"name": "2048 CI/CD Project", "description": "Built a CI/CD pipeline using AWS CodePipeline, ECS, and ECR."}], "full_name": "Allan Chien", "experience": [{"title": "Research Engineer", "description": "Worked on Bittide protocol implementation."}]}}, "job_description": {"job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer", "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."}, "extracted_requirements": ["aws", "linux", "ci/cd"], "matched_skills": ["aws"], "matched_projects": [{"name": "2048 CI/CD Project", "description": "Built a CI/CD pipeline using AWS CodePipeline, ECS, and ECR.", "score": 10, "matched_terms": ["ci/cd", "aws"]}], "matched_experiences": [], "prompt_context": {"candidate": {"full_name": "Allan Chien", "email": "allan@example.com"}, "target_role": {"company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer"}, "job_requirements": ["aws", "linux", "ci/cd"], "matched_skills": ["aws"], "matched_projects": [{"name": "2048 CI/CD Project", "description": "Built a CI/CD pipeline using AWS CodePipeline, ECS, and ECR.", "score": 10, "matched_terms": ["ci/cd", "aws"]}], "matched_experiences": []}}%                
+```
 
 
 --- 
