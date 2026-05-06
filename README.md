@@ -70,7 +70,7 @@ To create an AI-powered career document generation system that uses structured u
 
 - Export generated documents
 
-![MVP Architecture Diagram](Image/MVP-Archeticture.png)
+![MVP Architecture Diagram](Image/MVP-Archeticture-planing.png)
 
 
 1. Profile service Lambda
