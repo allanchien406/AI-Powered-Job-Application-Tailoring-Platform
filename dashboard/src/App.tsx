@@ -1,26 +1,18 @@
 import React from 'react';
-import { ModernTemplate } from './components/ModernTemplate';
-import { CVEditor } from './components/CVEditor';
-import { useCVStore } from './store/useCVStore';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { LoginPage } from './pages/LoginPage';
+import { CVBuilderPage } from './pages/CVBuilderPage';
+import { MyCVsPage } from './pages/MyCVsPage';
 
 export const App: React.FC = () => {
-  const cv = useCVStore((state) => state.cv);
-
   return (
-    <div
-      style={{
-        padding: '24px',
-        background: '#f0ede6',
-        minHeight: '100vh',
-        display: 'flex',
-        gap: '24px',
-        alignItems: 'flex-start',
-      }}
-    >
-      <CVEditor />
-      <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-        <ModernTemplate cv={cv} />
-      </div>
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<LoginPage />} />
+        <Route path="/builder" element={<CVBuilderPage />} />
+        <Route path="/my-cvs" element={<MyCVsPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
   );
 };

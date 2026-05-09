@@ -1,8 +1,15 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useCVStore } from '../store/useCVStore';
+import { SectionTitle, Field, Input, TextArea, Button, Card, Tag } from './ui';
+import { saveCv } from '../api/cvApi';
 
 export const CVEditor: React.FC = () => {
+  const navigate = useNavigate();
   const cv = useCVStore((state) => state.cv);
+  const email = useCVStore((state) => state.email);
+  const aiSidebarOpen = useCVStore((state) => state.aiSidebarOpen);
+  const toggleAISidebar = useCVStore((state) => state.toggleAISidebar);
   const updateField = useCVStore((state) => state.updateField);
   const addExperience = useCVStore((state) => state.addExperience);
   const updateExperience = useCVStore((state) => state.updateExperience);
@@ -14,6 +21,32 @@ export const CVEditor: React.FC = () => {
   const removeSkill = useCVStore((state) => state.removeSkill);
 
   const [newSkill, setNewSkill] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [cvName, setCvName] = useState('');
+
+  const handleSave = async () => {
+    if (!cvName.trim()) return;
+    setSaving(true);
+    try {
+      await saveCv(email, cvName.trim(), cv);
+      setCvName('');
+    } catch (err) {
+      console.error('Failed to save CV:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const Row: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <div style={{ display: 'flex', gap: '10px' }}>{children}</div>
+  );
+
+  const HalfField: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+    <label style={{ display: 'block', marginBottom: '10px', flex: 1 }}>
+      <div style={{ fontSize: '11px', color: '#6b665c', marginBottom: '6px' }}>{label}</div>
+      {children}
+    </label>
+  );
 
   return (
     <div
@@ -29,31 +62,82 @@ export const CVEditor: React.FC = () => {
         boxShadow: '0 8px 30px rgba(30, 22, 10, 0.08)',
       }}
     >
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+        <Button onClick={() => navigate('/my-cvs')}>My CVs</Button>
+        <Button
+          variant={aiSidebarOpen ? 'solid' : 'ghost'}
+          onClick={toggleAISidebar}
+        >
+          AI
+        </Button>
+        <Button onClick={() => navigate('/')}>Logout</Button>
+      </div>
+
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', alignItems: 'center' }}>
+        <Input
+          placeholder="CV name..."
+          value={cvName}
+          onChange={(e) => setCvName(e.target.value)}
+          style={{ marginBottom: 0 }}
+        />
+        <Button onClick={handleSave} style={{ whiteSpace: 'nowrap', marginBottom: 0 }}>
+          {saving ? 'Saving...' : 'Save CV'}
+        </Button>
+      </div>
+
       <SectionTitle>Basics</SectionTitle>
-      <Field label="Name">
-        <Input value={cv.name} onChange={(e) => updateField('name', e.target.value)} />
-      </Field>
-      <Field label="Title">
-        <Input value={cv.title} onChange={(e) => updateField('title', e.target.value)} />
-      </Field>
-      <Field label="Email">
-        <Input value={cv.email} onChange={(e) => updateField('email', e.target.value)} />
-      </Field>
-      <Field label="Phone">
-        <Input value={cv.phone} onChange={(e) => updateField('phone', e.target.value)} />
-      </Field>
+      <Row>
+        <HalfField label="Name">
+          <Input value={cv.name} onChange={(e) => updateField('name', e.target.value)} />
+        </HalfField>
+        <HalfField label="Title">
+          <Input value={cv.title} onChange={(e) => updateField('title', e.target.value)} />
+        </HalfField>
+      </Row>
+      <Row>
+        <HalfField label="Email">
+          <Input value={cv.email} onChange={(e) => updateField('email', e.target.value)} />
+        </HalfField>
+        <HalfField label="Phone">
+          <Input value={cv.phone} onChange={(e) => updateField('phone', e.target.value)} />
+        </HalfField>
+      </Row>
       <Field label="Location">
         <Input value={cv.location} onChange={(e) => updateField('location', e.target.value)} />
       </Field>
-      <Field label="Website">
-        <Input value={cv.website} onChange={(e) => updateField('website', e.target.value)} />
-      </Field>
-      <Field label="LinkedIn">
-        <Input value={cv.linkedin} onChange={(e) => updateField('linkedin', e.target.value)} />
-      </Field>
+      <Row>
+        <HalfField label="Website">
+          <Input value={cv.website} onChange={(e) => updateField('website', e.target.value)} />
+        </HalfField>
+        <HalfField label="LinkedIn">
+          <Input value={cv.linkedin} onChange={(e) => updateField('linkedin', e.target.value)} />
+        </HalfField>
+      </Row>
       <Field label="Accent Color">
-        <Input value={cv.accentColor} onChange={(e) => updateField('accentColor', e.target.value)} />
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <input
+            type="color"
+            value={cv.accentColor}
+            onChange={(e) => updateField('accentColor', e.target.value)}
+            style={{
+              width: '40px',
+              height: '34px',
+              padding: 0,
+              border: '1px solid #ded7c9',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              background: 'none',
+            }}
+          />
+          <Input
+            value={cv.accentColor}
+            onChange={(e) => updateField('accentColor', e.target.value)}
+            style={{ flex: 1, marginBottom: 0 }}
+          />
+        </div>
       </Field>
+
+      <SectionTitle>Professional Summary</SectionTitle>
       <Field label="Summary">
         <TextArea value={cv.summary} onChange={(e) => updateField('summary', e.target.value)} rows={5} />
       </Field>
@@ -137,109 +221,3 @@ export const CVEditor: React.FC = () => {
     </div>
   );
 };
-
-const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '0.08em', margin: '18px 0 10px' }}>
-    {children}
-  </div>
-);
-
-const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
-  <label style={{ display: 'block', marginBottom: '10px' }}>
-    <div style={{ fontSize: '11px', color: '#6b665c', marginBottom: '6px' }}>{label}</div>
-    {children}
-  </label>
-);
-
-const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = (props) => (
-  <input
-    {...props}
-    style={{
-      width: '100%',
-      padding: '8px 10px',
-      borderRadius: '8px',
-      border: '1px solid #ded7c9',
-      fontSize: '13px',
-      background: '#fff',
-      outline: 'none',
-    }}
-  />
-);
-
-const TextArea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> = (props) => (
-  <textarea
-    {...props}
-    style={{
-      width: '100%',
-      padding: '8px 10px',
-      borderRadius: '8px',
-      border: '1px solid #ded7c9',
-      fontSize: '13px',
-      background: '#fff',
-      outline: 'none',
-      resize: 'vertical',
-    }}
-  />
-);
-
-const Button: React.FC<
-  React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'solid' | 'ghost' }
-> = ({ variant = 'solid', ...props }) => (
-  <button
-    {...props}
-    style={{
-      padding: '8px 12px',
-      borderRadius: '8px',
-      border: variant === 'ghost' ? '1px solid #e1dacc' : '1px solid #2c4a3e',
-      background: variant === 'ghost' ? '#fff' : '#2c4a3e',
-      color: variant === 'ghost' ? '#2c4a3e' : '#fff',
-      fontSize: '12px',
-      cursor: 'pointer',
-      marginBottom: '12px',
-    }}
-  />
-);
-
-const Card: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div
-    style={{
-      padding: '12px',
-      border: '1px solid #ece6d8',
-      borderRadius: '10px',
-      background: '#fbfaf7',
-      marginBottom: '12px',
-    }}
-  >
-    {children}
-  </div>
-);
-
-const Tag: React.FC<{ children: React.ReactNode; onRemove: () => void }> = ({ children, onRemove }) => (
-  <span
-    style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '6px',
-      padding: '6px 10px',
-      background: '#f3efe7',
-      borderRadius: '999px',
-      fontSize: '12px',
-      color: '#3a352b',
-    }}
-  >
-    {children}
-    <button
-      type="button"
-      onClick={onRemove}
-      style={{
-        border: 'none',
-        background: 'transparent',
-        color: '#7a6f5f',
-        cursor: 'pointer',
-        fontSize: '12px',
-      }}
-    >
-      x
-    </button>
-  </span>
-);

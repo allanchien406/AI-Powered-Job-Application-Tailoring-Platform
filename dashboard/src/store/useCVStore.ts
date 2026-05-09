@@ -45,11 +45,17 @@ const DEFAULT_CV: CVData = {
 
 interface CVStore {
   cv: CVData;
+  email: string;
   template: TemplateId;
   notes: string;
   zoom: number;
+  aiSidebarOpen: boolean;
   past: CVData[];
   future: CVData[];
+
+  // Auth
+  login: (email: string) => void;
+  logout: () => void;
 
   // CV field actions
   updateField: <K extends keyof CVData>(field: K, value: CVData[K]) => void;
@@ -69,10 +75,15 @@ interface CVStore {
   addSkill: (skill: string) => void;
   removeSkill: (skill: string) => void;
 
+  // CV load/reset
+  loadCV: (cv: CVData) => void;
+  resetCV: () => void;
+
   // App state
   setTemplate: (id: TemplateId) => void;
   setNotes: (notes: string) => void;
   setZoom: (zoom: number) => void;
+  toggleAISidebar: () => void;
 
   // Undo / redo
   undo: () => void;
@@ -87,14 +98,49 @@ const cloneCv = (cv: CVData): CVData => {
   return JSON.parse(JSON.stringify(cv)) as CVData;
 };
 
+const storedEmail = (typeof localStorage !== 'undefined' ? localStorage.getItem('cv_email') : null) || '';
+
 export const useCVStore = create<CVStore>()(
   immer((set, get) => ({
     cv: DEFAULT_CV,
+    email: storedEmail,
     template: 'modern',
     notes: '• Follow up with recruiter by Friday\n• Tailor summary for tech roles\n• Add portfolio link once live',
     zoom: 0.72,
+    aiSidebarOpen: false,
     past: [],
     future: [],
+
+    login: (email) => {
+      localStorage.setItem('cv_email', email);
+      set((state) => { state.email = email; });
+    },
+
+    logout: () => {
+      localStorage.removeItem('cv_email');
+      set((state) => {
+        state.email = '';
+        state.cv = DEFAULT_CV;
+        state.past = [];
+        state.future = [];
+      });
+    },
+
+    loadCV: (cv) => {
+      set((state) => {
+        state.past = [];
+        state.future = [];
+        state.cv = cv;
+      });
+    },
+
+    resetCV: () => {
+      set((state) => {
+        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
+        state.future = [];
+        state.cv = cloneCv(DEFAULT_CV);
+      });
+    },
 
     updateField: (field, value) => {
       set((state) => {
@@ -187,6 +233,7 @@ export const useCVStore = create<CVStore>()(
     setTemplate: (id) => set((state) => { state.template = id; }),
     setNotes: (notes) => set((state) => { state.notes = notes; }),
     setZoom: (zoom) => set((state) => { state.zoom = zoom; }),
+    toggleAISidebar: () => set((state) => { state.aiSidebarOpen = !state.aiSidebarOpen; }),
 
     undo: () => {
       set((state) => {
