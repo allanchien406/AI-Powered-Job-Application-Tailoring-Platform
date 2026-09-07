@@ -134,6 +134,44 @@ item without specifying whose partition to read from.
   cached," so the next successful save automatically retries it.
 - ✅ **Entry matching for the embedding cache is name/title-based**, not
   array-position-based (see the Embedding cache section above).
+- ✅ **Staged, per-service AWS deployment.** Each Lambda gets deployed to real
+  AWS only after it's passed code review — not the whole stack at once just
+  because the code exists in the repo. Mechanically: a throwaway branch
+  (e.g. `test/deploy-profile-service`) branches off `develop` and trims
+  `infra-stack.ts` down to only the reviewed service(s); `develop` itself always
+  keeps the full, accurate architecture. The throwaway branch is never merged
+  back — restoring the full stack means returning to `develop`'s version of
+  `infra-stack.ts` once every service has passed review. If a bug is found
+  during real-AWS testing, the fix goes on `develop` (the real source of
+  truth), then gets pulled into the test branch with `git merge develop`
+  before redeploying.
+
+## Known bugs found during AWS verification
+
+- 🐛 **`BEDROCK_MODEL_ID`'s value is wrong for Claude Haiku 4.5.** A direct
+  `bedrock-runtime converse` test call against `anthropic.claude-haiku-4-5-20251001-v1:0`
+  failed: `ValidationException: Invocation of model ID ... with on-demand
+  throughput isn't supported. Retry your request with the ID or ARN of an
+  inference profile`. The correct value is the inference profile ID
+  `us.anthropic.claude-haiku-4-5-20251001-v1:0` (confirmed via
+  `aws bedrock list-inference-profiles`). This also means the IAM policy
+  resource ARN in `infra-stack.ts` (currently
+  `arn:aws:bedrock:{region}::foundation-model/{id}`) is the wrong ARN shape for
+  an inference profile and needs updating too. Doesn't block `profile-service`
+  (which only uses Titan Embeddings, confirmed working) — needs fixing before
+  `tailoring-service`'s generation call can work.
+
+## AWS verification status
+
+- ✅ **`profile-service`** — deployed to real AWS (account `681583877402`,
+  `us-east-1`) via the staged process above and manually verified: `PUT`/`GET
+  /profile` round-trip correctly, embeddings are real (1024-dim, confirmed by
+  reading the raw DynamoDB item) and hidden from API responses, the cache
+  reuses an unchanged entry's embedding byte-for-byte while correctly
+  re-embedding an edited one, and all error paths (404/400) behave as
+  expected. CloudWatch logs clean across every test call.
+- Not yet deployed/verified: `job-service`, `tailoring-service` — pending code
+  review.
 
 ## Deferred / explicitly out of scope
 
