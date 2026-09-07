@@ -58,9 +58,17 @@ export const LoginPage: React.FC = () => {
         </Field>
         <Button
           type="submit"
-          style={{ width: '100%', padding: '10px', fontSize: '14px', marginBottom: 0 }}
+          style={{ width: '100%', padding: '10px', fontSize: '14px', marginBottom: '12px' }}
         >
           Get Started
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => navigate('/demo')}
+          style={{ width: '100%', padding: '10px', fontSize: '13px', marginBottom: 0 }}
+        >
+          Try the new "paste your background" demo →
         </Button>
       </form>
     </div>
