@@ -121,14 +121,19 @@ item without specifying whose partition to read from.
 - Returns `{title, summary, experience[]}` shaped to map onto the frontend's
   `CVData` — not yet wired into the dashboard (see Deferred).
 
-## Open decisions
+## Resolved decisions
 
-- ❓ **Fail-fast vs. graceful degradation** when `embed_text` throws during
-  `profile-service`'s save (e.g. Bedrock model access not enabled, throttling).
-  Currently fails the whole save with a 500, even though the DynamoDB write
-  itself would have succeeded. Alternative: save the profile with
-  `embedding: None` on the affected entry and let `tailoring-service`'s existing
-  fallback (re-embed inline if missing) pick it up later.
+- ✅ **Graceful degradation on embedding failure** — `profile-service`'s
+  `attach_embeddings` now catches any failure from `embed_text` per-entry
+  rather than letting it propagate and fail the whole save. A failed entry is
+  stored with `embedding: None` and the save still succeeds; the response
+  includes a non-fatal `embedding_warnings` list naming which entries didn't
+  get embedded. This is self-healing, not just swallowed: `tailoring-service`
+  already falls back to embedding inline for an entry with no cached vector,
+  and `attach_embeddings`'s own reuse check treats `embedding: None` as "not
+  cached," so the next successful save automatically retries it.
+- ✅ **Entry matching for the embedding cache is name/title-based**, not
+  array-position-based (see the Embedding cache section above).
 
 ## Deferred / explicitly out of scope
 

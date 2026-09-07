@@ -120,6 +120,13 @@ def attach_embeddings(new_entries, existing_entries, text_keys):
     whose content didn't actually change. If two entries share the same identity
     value, the later one in the stored list wins the lookup — an acceptable edge
     case at this scale, not worth a more elaborate identity scheme yet.
+
+    A Bedrock failure while embedding a new/changed entry does NOT fail the
+    whole save — the entry is stored with embedding=None and a warning is
+    returned instead. This is safe to leave for later: tailoring-service
+    already falls back to embedding inline if an entry has no cached vector,
+    and the "existing_entry.get('embedding')" check below means the *next*
+    successful save automatically retries any entry stuck at None.
     """
     identity_key = text_keys[0]
     existing_by_identity = {
@@ -129,15 +136,24 @@ def attach_embeddings(new_entries, existing_entries, text_keys):
     }
 
     result = []
+    warnings = []
     for entry in new_entries:
         existing_entry = existing_by_identity.get(entry.get(identity_key))
         if entry_text_unchanged(existing_entry, entry, text_keys) and existing_entry.get("embedding"):
             entry = {**entry, "embedding": existing_entry["embedding"]}
         else:
             combined_text = " ".join(entry.get(key, "") for key in text_keys)
-            entry = {**entry, "embedding": embed_text(combined_text)}
+            try:
+                entry = {**entry, "embedding": embed_text(combined_text)}
+            except Exception as exc:
+                # Broad on purpose: whatever went wrong with Bedrock, the
+                # user's actual data must still get saved.
+                identity_value = entry.get(identity_key) or "(unnamed entry)"
+                print(f"embed_text failed for {identity_value!r}: {exc}")
+                entry = {**entry, "embedding": None}
+                warnings.append(f"{identity_value}: embedding failed, will retry on next save")
         result.append(entry)
-    return result
+    return result, warnings
 
 
 def strip_embeddings(profile):
@@ -162,10 +178,10 @@ def save_profile(table, normalized_profile):
     email = normalized_profile["email"]
     existing = get_profile_by_email(table, email) or {}
 
-    projects = attach_embeddings(
+    projects, project_warnings = attach_embeddings(
         normalized_profile["projects"], existing.get("projects", []), ["name", "description"]
     )
-    experience = attach_embeddings(
+    experience, experience_warnings = attach_embeddings(
         normalized_profile["experience"], existing.get("experience", []), ["title", "description"]
     )
 
@@ -179,7 +195,7 @@ def save_profile(table, normalized_profile):
         "updated_at": now_iso(),
     }
     table.put_item(Item=item)
-    return item
+    return item, project_warnings + experience_warnings
 
 
 def handler(event, context):
@@ -211,12 +227,13 @@ def handler(event, context):
             if not email:
                 return response(400, {"error": "email is required"})
 
-            item = save_profile(table, normalized_profile)
+            item, embedding_warnings = save_profile(table, normalized_profile)
 
-            return response(
-                200,
-                {"message": "Profile saved successfully", **strip_embeddings(item)},
-            )
+            result = {"message": "Profile saved successfully", **strip_embeddings(item)}
+            if embedding_warnings:
+                result["embedding_warnings"] = embedding_warnings
+
+            return response(200, result)
 
         return response(405, {"error": f"Method {http_method} not allowed"})
 
