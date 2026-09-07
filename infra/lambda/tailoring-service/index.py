@@ -1,9 +1,15 @@
 import json
+import math
 import os
 import re
+from decimal import Decimal
 
 import boto3
-import pg8000
+from botocore.exceptions import ClientError
+
+
+dynamodb = boto3.resource("dynamodb")
+bedrock_runtime = boto3.client("bedrock-runtime")
 
 
 KNOWN_SKILLS = [
@@ -47,95 +53,47 @@ SKILL_ALIASES = {
     "github actions": "github actions",
 }
 
+# Semantic score is a cosine similarity in [-1, 1]; this weight puts a strong
+# semantic match (~0.7+) roughly on par with matching two keyword terms.
+SEMANTIC_WEIGHT = 6
+# Low bar — a pure semantic match (0 keyword overlap) only needs a modest
+# cosine similarity to surface; this just filters out near-zero noise.
+MIN_TOTAL_SCORE = 0.5
+
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, Decimal):
+            return float(o)
+        return super().default(o)
 
 
 def response(status_code, body):
     return {
         "statusCode": status_code,
         "headers": {"content-type": "application/json"},
-        "body": json.dumps(body),
+        "body": json.dumps(body, cls=DecimalEncoder),
     }
 
 
-
-def get_db_credentials():
-    secret_arn = os.environ["DB_SECRET_ARN"]
-    secrets_client = boto3.client("secretsmanager")
-    secret_value = secrets_client.get_secret_value(SecretId=secret_arn)
-    secret_string = secret_value.get("SecretString")
-
-    if not secret_string:
-        raise ValueError("Database secret is missing SecretString")
-
-    return json.loads(secret_string)
+def profiles_table():
+    return dynamodb.Table(os.environ["PROFILES_TABLE_NAME"])
 
 
-
-def get_db_connection(credentials):
-    return pg8000.connect(
-        host=os.environ["DB_HOST"],
-        port=int(os.environ["DB_PORT"]),
-        database=os.environ["DB_NAME"],
-        user=credentials["username"],
-        password=credentials["password"],
-        timeout=5,
-    )
+def job_descriptions_table():
+    return dynamodb.Table(os.environ["JOB_DESCRIPTIONS_TABLE_NAME"])
 
 
-
-def get_profile_by_email(conn, email):
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, email, full_name, profile_data
-        FROM profiles
-        WHERE email = %s;
-        """,
-        (email,),
-    )
-    row = cur.fetchone()
-    cur.close()
-
-    if not row:
-        return None
-
-    return {
-        "profile_id": row[0],
-        "email": row[1],
-        "full_name": row[2],
-        "profile_data": row[3],
-    }
+def get_profile_by_email(email):
+    return profiles_table().get_item(Key={"email": email}).get("Item")
 
 
-
-def get_job_description_by_id(conn, job_id):
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, company_name, job_title, raw_description
-        FROM job_descriptions
-        WHERE id = %s;
-        """,
-        (job_id,),
-    )
-    row = cur.fetchone()
-    cur.close()
-
-    if not row:
-        return None
-
-    return {
-        "job_id": row[0],
-        "company_name": row[1],
-        "job_title": row[2],
-        "raw_description": row[3],
-    }
-
+def get_job_description_by_id(email, job_id):
+    return job_descriptions_table().get_item(Key={"email": email, "job_id": job_id}).get("Item")
 
 
 def normalize_text(text):
     return re.sub(r"\s+", " ", text.lower()).strip()
-
 
 
 def extract_requirements_from_raw_description(raw_description):
@@ -154,8 +112,6 @@ def extract_requirements_from_raw_description(raw_description):
     return extracted
 
 
-# --- New functions ---
-
 def canonicalize_skill(skill):
     normalized = normalize_text(skill)
     return SKILL_ALIASES.get(normalized, normalized)
@@ -173,16 +129,12 @@ def dedupe_preserve_order(items):
     return result
 
 
-def match_skills(profile_data, extracted_requirements):
-    raw_skills = profile_data.get("skills", [])
+def match_skills(profile, extracted_requirements):
+    raw_skills = profile.get("skills", [])
     normalized_profile_skills = [canonicalize_skill(skill) for skill in raw_skills if isinstance(skill, str)]
     normalized_profile_skills = dedupe_preserve_order(normalized_profile_skills)
 
-    matched_skills = [
-        requirement for requirement in extracted_requirements if requirement in normalized_profile_skills
-    ]
-
-    return matched_skills
+    return [requirement for requirement in extracted_requirements if requirement in normalized_profile_skills]
 
 
 def score_text_against_requirements(text, extracted_requirements, weight):
@@ -201,8 +153,12 @@ def score_text_against_requirements(text, extracted_requirements, weight):
     return score, matched_terms
 
 
-def score_projects(profile_data, extracted_requirements):
-    projects = profile_data.get("projects", [])
+# --- Keyword-only scoring: used by /tailor-preview. No Bedrock calls, cheap
+# enough to run on every keystroke of a live preview. ---
+
+
+def score_projects(profile, extracted_requirements):
+    projects = profile.get("projects", [])
     scored_projects = []
 
     for project in projects:
@@ -212,9 +168,7 @@ def score_projects(profile_data, extracted_requirements):
         project_name = project.get("name", "")
         project_description = project.get("description", "")
 
-        title_score, title_matches = score_text_against_requirements(
-            project_name, extracted_requirements, 4
-        )
+        title_score, title_matches = score_text_against_requirements(project_name, extracted_requirements, 4)
         description_score, description_matches = score_text_against_requirements(
             project_description, extracted_requirements, 3
         )
@@ -236,8 +190,8 @@ def score_projects(profile_data, extracted_requirements):
     return scored_projects
 
 
-def score_experience(profile_data, extracted_requirements):
-    experiences = profile_data.get("experience", [])
+def score_experience(profile, extracted_requirements):
+    experiences = profile.get("experience", [])
     scored_experiences = []
 
     for experience in experiences:
@@ -247,9 +201,7 @@ def score_experience(profile_data, extracted_requirements):
         experience_title = experience.get("title", "")
         experience_description = experience.get("description", "")
 
-        title_score, title_matches = score_text_against_requirements(
-            experience_title, extracted_requirements, 4
-        )
+        title_score, title_matches = score_text_against_requirements(experience_title, extracted_requirements, 4)
         description_score, description_matches = score_text_against_requirements(
             experience_description, extracted_requirements, 2
         )
@@ -271,6 +223,99 @@ def score_experience(profile_data, extracted_requirements):
     return scored_experiences
 
 
+# --- Semantic-augmented scoring: used by /tailor-generate only. ---
+
+
+def embed_text(text):
+    if not text or not text.strip():
+        return None
+
+    body = json.dumps({"inputText": text[:8000]})
+    resp = bedrock_runtime.invoke_model(
+        modelId=os.environ["BEDROCK_EMBEDDING_MODEL_ID"],
+        body=body,
+        contentType="application/json",
+        accept="application/json",
+    )
+    payload = json.loads(resp["body"].read())
+    return payload.get("embedding")
+
+
+def to_float_vector(vector):
+    if not vector:
+        return None
+    return [float(value) for value in vector]
+
+
+def cosine_similarity(vec_a, vec_b):
+    if not vec_a or not vec_b:
+        return 0.0
+
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = math.sqrt(sum(a * a for a in vec_a))
+    norm_b = math.sqrt(sum(b * b for b in vec_b))
+
+    if not norm_a or not norm_b:
+        return 0.0
+
+    return dot / (norm_a * norm_b)
+
+
+def score_entries_with_semantics(entries, extracted_requirements, jd_vector, title_field, description_field, title_weight, description_weight):
+    """Score every entry on keyword AND semantic similarity, unfiltered, before
+    any cutoff — filtering by keyword score first (as score_projects/score_experience
+    do) would throw away a paraphrase-only match before semantic scoring ever runs."""
+    scored = []
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+
+        title_text = entry.get(title_field, "")
+        description_text = entry.get(description_field, "")
+
+        title_score, title_matches = score_text_against_requirements(title_text, extracted_requirements, title_weight)
+        description_score, description_matches = score_text_against_requirements(
+            description_text, extracted_requirements, description_weight
+        )
+        keyword_score = title_score + description_score
+
+        entry_vector = to_float_vector(entry.get("embedding"))
+        if entry_vector is None:
+            # Safety net for entries saved before embeddings existed.
+            entry_vector = embed_text(f"{title_text} {description_text}")
+        semantic_score = cosine_similarity(jd_vector, entry_vector) if entry_vector else 0.0
+
+        total_score = keyword_score + semantic_score * SEMANTIC_WEIGHT
+        if total_score <= MIN_TOTAL_SCORE:
+            continue
+
+        scored.append(
+            {
+                title_field: title_text,
+                description_field: description_text,
+                "score": round(total_score, 2),
+                "matched_terms": dedupe_preserve_order(title_matches + description_matches),
+                "semantic_score": round(semantic_score, 3),
+            }
+        )
+
+    scored.sort(key=lambda item: item["score"], reverse=True)
+    return scored
+
+
+def score_projects_with_semantics(profile, extracted_requirements, jd_vector):
+    return score_entries_with_semantics(
+        profile.get("projects", []), extracted_requirements, jd_vector, "name", "description", 4, 3
+    )
+
+
+def score_experience_with_semantics(profile, extracted_requirements, jd_vector):
+    return score_entries_with_semantics(
+        profile.get("experience", []), extracted_requirements, jd_vector, "title", "description", 4, 2
+    )
+
+
 def build_prompt_context(profile, job_description, extracted_requirements, matched_skills, matched_projects, matched_experiences):
     return {
         "candidate": {
@@ -288,79 +333,132 @@ def build_prompt_context(profile, job_description, extracted_requirements, match
     }
 
 
+def call_bedrock_for_tailoring(prompt_context):
+    system_prompt = (
+        "You are a CV tailoring assistant. Given a candidate's matched skills, projects, "
+        "and experience and a target job, produce a tailored CV section. "
+        "Respond with ONLY valid JSON matching this schema: "
+        '{"title": string, "summary": string, "experience": '
+        '[{"company": string, "role": string, "period": string, "description": string}]}. '
+        "Only use facts present in the candidate's matched projects, experience, and skills "
+        "below — do not invent employers, dates, or achievements that are not present in the input."
+    )
+
+    resp = bedrock_runtime.converse(
+        modelId=os.environ["BEDROCK_MODEL_ID"],
+        system=[{"text": system_prompt}],
+        messages=[{"role": "user", "content": [{"text": json.dumps(prompt_context)}]}],
+        inferenceConfig={"maxTokens": 1024, "temperature": 0.4},
+    )
+    raw_text = resp["output"]["message"]["content"][0]["text"]
+    return json.loads(raw_text)
+
+
+def handle_tailor_preview(event):
+    body = event.get("body")
+    data = json.loads(body) if body else {}
+
+    email = data.get("email")
+    job_id = data.get("job_id")
+
+    if not email:
+        return response(400, {"error": "email is required"})
+    if not job_id:
+        return response(400, {"error": "job_id is required"})
+
+    profile = get_profile_by_email(email)
+    if not profile:
+        return response(404, {"error": "Profile not found"})
+
+    job_description = get_job_description_by_id(email, job_id)
+    if not job_description:
+        return response(404, {"error": "Job description not found"})
+
+    extracted_requirements = extract_requirements_from_raw_description(job_description["raw_description"])
+    matched_skills = match_skills(profile, extracted_requirements)
+    matched_projects = score_projects(profile, extracted_requirements)
+    matched_experiences = score_experience(profile, extracted_requirements)
+    prompt_context = build_prompt_context(
+        profile, job_description, extracted_requirements, matched_skills, matched_projects, matched_experiences
+    )
+
+    return response(
+        200,
+        {
+            "message": "Tailor preview data loaded successfully",
+            "email": email,
+            "job_id": job_id,
+            "extracted_requirements": extracted_requirements,
+            "matched_skills": matched_skills,
+            "matched_projects": matched_projects,
+            "matched_experiences": matched_experiences,
+            "prompt_context": prompt_context,
+        },
+    )
+
+
+def handle_tailor_generate(event):
+    data = json.loads(event.get("body") or "{}")
+    email = data.get("email")
+
+    if not email:
+        return response(400, {"error": "email is required"})
+
+    profile = get_profile_by_email(email)
+    if not profile:
+        return response(404, {"error": "Profile not found"})
+
+    if data.get("job_id"):
+        job_description = get_job_description_by_id(email, data["job_id"])
+        if not job_description:
+            return response(404, {"error": "Job description not found"})
+        jd_vector = to_float_vector(job_description.get("embedding")) or embed_text(job_description["raw_description"])
+    else:
+        missing = [field for field in ("company_name", "job_title", "raw_description") if not data.get(field)]
+        if missing:
+            return response(400, {"error": f"{missing[0]} is required when job_id is omitted"})
+        job_description = {key: data[key] for key in ("company_name", "job_title", "raw_description")}
+        jd_vector = embed_text(job_description["raw_description"])
+
+    extracted_requirements = extract_requirements_from_raw_description(job_description["raw_description"])
+    matched_skills = match_skills(profile, extracted_requirements)
+    matched_projects = score_projects_with_semantics(profile, extracted_requirements, jd_vector)
+    matched_experiences = score_experience_with_semantics(profile, extracted_requirements, jd_vector)
+    prompt_context = build_prompt_context(
+        profile, job_description, extracted_requirements, matched_skills, matched_projects, matched_experiences
+    )
+
+    try:
+        generated_cv = call_bedrock_for_tailoring(prompt_context)
+    except json.JSONDecodeError:
+        return response(502, {"error": "Model returned invalid JSON"})
+    except ClientError as exc:
+        return response(502, {"error": f"Bedrock call failed: {exc.response['Error']['Code']}"})
+
+    return response(
+        200,
+        {
+            "message": "Tailored CV generated",
+            "email": email,
+            "prompt_context": prompt_context,
+            "generated_cv": generated_cv,
+        },
+    )
+
 
 def handler(event, context):
     try:
         http_method = event.get("requestContext", {}).get("http", {}).get("method")
         raw_path = event.get("rawPath")
 
-        if raw_path != "/tailor-preview":
-            return response(404, {"error": "Route not found"})
+        if raw_path == "/tailor-preview" and http_method == "POST":
+            return handle_tailor_preview(event)
 
-        if http_method != "POST":
-            return response(405, {"error": f"Method {http_method} not allowed"})
+        if raw_path == "/tailor-generate" and http_method == "POST":
+            return handle_tailor_generate(event)
 
-        body = event.get("body")
-        data = json.loads(body) if body else {}
+        return response(404, {"error": "Route not found"})
 
-        email = data.get("email")
-        job_id = data.get("job_id")
-
-        if not email:
-            return response(400, {"error": "email is required"})
-        if job_id is None:
-            return response(400, {"error": "job_id is required"})
-
-        try:
-            job_id_int = int(job_id)
-        except ValueError:
-            return response(400, {"error": "job_id must be an integer"})
-
-        credentials = get_db_credentials()
-        conn = get_db_connection(credentials)
-        try:
-            profile = get_profile_by_email(conn, email)
-            if not profile:
-                return response(404, {"error": "Profile not found"})
-
-            job_description = get_job_description_by_id(conn, job_id_int)
-            if not job_description:
-                return response(404, {"error": "Job description not found"})
-
-            extracted_requirements = extract_requirements_from_raw_description(
-                job_description["raw_description"]
-            )
-
-            profile_data = profile.get("profile_data", {})
-            matched_skills = match_skills(profile_data, extracted_requirements)
-            matched_projects = score_projects(profile_data, extracted_requirements)
-            matched_experiences = score_experience(profile_data, extracted_requirements)
-            prompt_context = build_prompt_context(
-                profile,
-                job_description,
-                extracted_requirements,
-                matched_skills,
-                matched_projects,
-                matched_experiences,
-            )
-
-            return response(
-                200,
-                {
-                    "message": "Tailor preview data loaded successfully",
-                    "email": email,
-                    "job_id": job_id_int,
-                    "profile": profile,
-                    "job_description": job_description,
-                    "extracted_requirements": extracted_requirements,
-                    "matched_skills": matched_skills,
-                    "matched_projects": matched_projects,
-                    "matched_experiences": matched_experiences,
-                    "prompt_context": prompt_context,
-                },
-            )
-        finally:
-            conn.close()
     except json.JSONDecodeError:
         return response(400, {"error": "Invalid JSON body"})
     except KeyError as exc:

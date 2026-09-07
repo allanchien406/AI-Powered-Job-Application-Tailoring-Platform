@@ -1,16 +1,38 @@
 import json
 import os
+from datetime import datetime, timezone
+from decimal import Decimal
 
 import boto3
-import pg8000
+
+
+dynamodb = boto3.resource("dynamodb")
+bedrock_runtime = boto3.client("bedrock-runtime")
+
+
+class DecimalEncoder(json.JSONEncoder):
+    """DynamoDB returns numbers as Decimal; json.dumps doesn't know how to serialize those."""
+
+    def default(self, o):
+        if isinstance(o, Decimal):
+            return float(o)
+        return super().default(o)
 
 
 def response(status_code, body):
     return {
         "statusCode": status_code,
         "headers": {"content-type": "application/json"},
-        "body": json.dumps(body),
+        "body": json.dumps(body, cls=DecimalEncoder),
     }
+
+
+def get_table():
+    return dynamodb.Table(os.environ["PROFILES_TABLE_NAME"])
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
 
 
 def normalize_string_list(values):
@@ -63,146 +85,140 @@ def normalize_profile_payload(data):
     }
 
 
-
-def get_db_credentials():
-    secret_arn = os.environ["DB_SECRET_ARN"]
-    secrets_client = boto3.client("secretsmanager")
-    secret_value = secrets_client.get_secret_value(SecretId=secret_arn)
-    secret_string = secret_value.get("SecretString")
-
-    if not secret_string:
-        raise ValueError("Database secret is missing SecretString")
-
-    return json.loads(secret_string)
-
-
-
-def get_db_connection(credentials):
-    return pg8000.connect(
-        host=os.environ["DB_HOST"],
-        port=int(os.environ["DB_PORT"]),
-        database=os.environ["DB_NAME"],
-        user=credentials["username"],
-        password=credentials["password"],
-        timeout=5,
-    )
-
-
-
-def create_profiles_table(conn):
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS profiles (
-            id SERIAL PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            full_name TEXT,
-            profile_data JSONB NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        """
-    )
-    conn.commit()
-    cur.close()
-
-
-
-def save_profile(conn, email, full_name, profile_data):
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO profiles (email, full_name, profile_data)
-        VALUES (%s, %s, %s::jsonb)
-        ON CONFLICT (email)
-        DO UPDATE SET
-            full_name = EXCLUDED.full_name,
-            profile_data = EXCLUDED.profile_data,
-            updated_at = NOW()
-        RETURNING id;
-        """,
-        (email, full_name, json.dumps(profile_data)),
-    )
-    profile_id = cur.fetchone()[0]
-    conn.commit()
-    cur.close()
-    return profile_id
-
-
-def get_profile_by_email(conn, email):
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, email, full_name, profile_data
-        FROM profiles
-        WHERE email = %s;
-        """,
-        (email,),
-    )
-    row = cur.fetchone()
-    cur.close()
-
-    if not row:
+def embed_text(text):
+    if not text or not text.strip():
         return None
 
-    profile_data = row[3] if isinstance(row[3], dict) else {}
-    normalized_profile = normalize_profile_payload(profile_data)
-    normalized_profile["email"] = row[1]
-    normalized_profile["full_name"] = row[2] or normalized_profile["full_name"]
+    body = json.dumps({"inputText": text[:8000]})
+    resp = bedrock_runtime.invoke_model(
+        modelId=os.environ["BEDROCK_EMBEDDING_MODEL_ID"],
+        body=body,
+        contentType="application/json",
+        accept="application/json",
+    )
+    payload = json.loads(resp["body"].read())
+    embedding = payload.get("embedding")
+    if embedding is None:
+        return None
+    # DynamoDB's number type doesn't accept native floats — store as Decimal.
+    return [Decimal(str(value)) for value in embedding]
 
-    return {"profile_id": row[0], **normalized_profile}
 
+def entry_text_unchanged(existing_entry, new_entry, text_keys):
+    if not existing_entry:
+        return False
+    return all(existing_entry.get(key) == new_entry.get(key) for key in text_keys)
+
+
+def attach_embeddings(new_entries, existing_entries, text_keys):
+    """Reuse a cached embedding for an entry whose text hasn't changed since the
+    last save; only call Bedrock for entries that are new or edited.
+
+    Matched by identity field (the first of text_keys — "name" for projects,
+    "title" for experience) rather than array position, so reordering entries or
+    deleting an earlier one doesn't cascade into needless re-embeds for entries
+    whose content didn't actually change. If two entries share the same identity
+    value, the later one in the stored list wins the lookup — an acceptable edge
+    case at this scale, not worth a more elaborate identity scheme yet.
+    """
+    identity_key = text_keys[0]
+    existing_by_identity = {
+        existing_entry.get(identity_key): existing_entry
+        for existing_entry in existing_entries
+        if isinstance(existing_entry, dict) and existing_entry.get(identity_key)
+    }
+
+    result = []
+    for entry in new_entries:
+        existing_entry = existing_by_identity.get(entry.get(identity_key))
+        if entry_text_unchanged(existing_entry, entry, text_keys) and existing_entry.get("embedding"):
+            entry = {**entry, "embedding": existing_entry["embedding"]}
+        else:
+            combined_text = " ".join(entry.get(key, "") for key in text_keys)
+            entry = {**entry, "embedding": embed_text(combined_text)}
+        result.append(entry)
+    return result
+
+
+def strip_embeddings(profile):
+    """Embeddings are internal plumbing for tailoring-service — don't echo
+    ~1500-float vectors back through the public API."""
+
+    def without_embedding(entries):
+        return [{k: v for k, v in entry.items() if k != "embedding"} for entry in entries]
+
+    return {
+        **profile,
+        "projects": without_embedding(profile.get("projects", [])),
+        "experience": without_embedding(profile.get("experience", [])),
+    }
+
+
+def get_profile_by_email(table, email):
+    return table.get_item(Key={"email": email}).get("Item")
+
+
+def save_profile(table, normalized_profile):
+    email = normalized_profile["email"]
+    existing = get_profile_by_email(table, email) or {}
+
+    projects = attach_embeddings(
+        normalized_profile["projects"], existing.get("projects", []), ["name", "description"]
+    )
+    experience = attach_embeddings(
+        normalized_profile["experience"], existing.get("experience", []), ["title", "description"]
+    )
+
+    item = {
+        "email": email,
+        "full_name": normalized_profile["full_name"],
+        "skills": normalized_profile["skills"],
+        "projects": projects,
+        "experience": experience,
+        "created_at": existing.get("created_at", now_iso()),
+        "updated_at": now_iso(),
+    }
+    table.put_item(Item=item)
+    return item
 
 
 def handler(event, context):
     try:
         http_method = event.get("requestContext", {}).get("http", {}).get("method")
+        table = get_table()
 
-        credentials = get_db_credentials()
+        if event.get("rawPath") == "/profile" and http_method == "GET":
+            query_params = event.get("queryStringParameters") or {}
+            email = query_params.get("email")
 
-        conn = get_db_connection(credentials)
-        try:
-            create_profiles_table(conn)
+            if not email:
+                return response(400, {"error": "email query parameter is required"})
 
-            if event.get("rawPath") == "/profile" and http_method == "GET":
-                query_params = event.get("queryStringParameters") or {}
-                email = query_params.get("email")
+            profile = get_profile_by_email(table, email)
 
-                if not email:
-                    return response(400, {"error": "email query parameter is required"})
+            if not profile:
+                return response(404, {"error": "Profile not found"})
 
-                profile = get_profile_by_email(conn, email)
+            return response(200, strip_embeddings(profile))
 
-                if not profile:
-                    return response(404, {"error": "Profile not found"})
+        if event.get("rawPath") == "/profile" and http_method == "PUT":
+            body = event.get("body")
+            data = json.loads(body) if body else {}
 
-                return response(200, profile)
+            normalized_profile = normalize_profile_payload(data)
+            email = normalized_profile["email"]
 
-            if event.get("rawPath") == "/profile" and http_method == "PUT":
-                body = event.get("body")
-                data = json.loads(body) if body else {}
+            if not email:
+                return response(400, {"error": "email is required"})
 
-                normalized_profile = normalize_profile_payload(data)
-                email = normalized_profile["email"]
-                full_name = normalized_profile["full_name"]
+            item = save_profile(table, normalized_profile)
 
-                if not email:
-                    return response(400, {"error": "email is required"})
+            return response(
+                200,
+                {"message": "Profile saved successfully", **strip_embeddings(item)},
+            )
 
-                profile_id = save_profile(conn, email, full_name, normalized_profile)
-
-                return response(
-                    200,
-                    {
-                        "message": "Profile saved successfully",
-                        "profile_id": profile_id,
-                        **normalized_profile,
-                    },
-                )
-
-            return response(405, {"error": f"Method {http_method} not allowed"})
-        finally:
-            conn.close()
+        return response(405, {"error": f"Method {http_method} not allowed"})
 
     except json.JSONDecodeError:
         return response(400, {"error": "Invalid JSON body"})

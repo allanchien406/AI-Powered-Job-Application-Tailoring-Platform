@@ -3,126 +3,68 @@ import { Construct } from "constructs";
 import { Function, Runtime, Code } from "aws-cdk-lib/aws-lambda";
 import { HttpApi } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
-import * as ec2 from "aws-cdk-lib/aws-ec2";
-import * as rds from "aws-cdk-lib/aws-rds";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as iam from "aws-cdk-lib/aws-iam";
+
+// Verify these against the Bedrock console's model catalog for your account/region
+// before deploying — Bedrock model IDs are not guaranteed stable across regions.
+const BEDROCK_MODEL_ID = "anthropic.claude-haiku-4-5-20251001-v1:0";
+const BEDROCK_EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0";
 
 export class InfraStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    const vpc = new ec2.Vpc(this, "AppVpc", {
-      maxAzs: 2,
-      natGateways: 0,
-      subnetConfiguration: [
-        {
-          name: "PublicSubnet",
-          subnetType: ec2.SubnetType.PUBLIC,
-        },
-        {
-          name: "PrivateSubnet",
-          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-        },
+    // --- Storage ---
+    // Both profiles and job descriptions are single-item-per-key JSON documents
+    // with no relational joins between them anywhere in the app — DynamoDB fits
+    // this better than RDS did, and drops the VPC/Secrets Manager machinery
+    // that existed purely to let Lambdas reach Postgres.
+
+    const profilesTable = new dynamodb.Table(this, "ProfilesTable", {
+      partitionKey: { name: "email", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT recommended for production environments
+    });
+
+    const jobDescriptionsTable = new dynamodb.Table(this, "JobDescriptionsTable", {
+      partitionKey: { name: "email", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "job_id", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // --- Shared Bedrock access ---
+    // Scoped to the two specific models this app uses, not bedrock:* / resource "*".
+
+    const bedrockInvokePolicy = new iam.PolicyStatement({
+      actions: ["bedrock:InvokeModel"],
+      resources: [
+        `arn:aws:bedrock:${this.region}::foundation-model/${BEDROCK_MODEL_ID}`,
+        `arn:aws:bedrock:${this.region}::foundation-model/${BEDROCK_EMBEDDING_MODEL_ID}`,
       ],
     });
 
-    const lambdaSecurityGroup = new ec2.SecurityGroup(
-      this,
-      "LambdaSecurityGroup",
-      {
-        vpc,
-        description:
-          "Security group for profile service Lambda function to access RDS",
-        allowAllOutbound: true,
-      },
-    );
+    const bedrockEnv = {
+      BEDROCK_MODEL_ID,
+      BEDROCK_EMBEDDING_MODEL_ID,
+    };
 
-    const databaseSecurityGroup = new ec2.SecurityGroup(
-      this,
-      "DatabaseSecurityGroup",
-      {
-        vpc,
-        description:
-          "Security group for RDS instance to allow access from Lambda",
-        allowAllOutbound: true,
-      },
-    );
-
-    databaseSecurityGroup.addIngressRule(
-      lambdaSecurityGroup,
-      ec2.Port.tcp(5432),
-      "Allow Lambda to access RDS on port 5432",
-    );
-
-    const secretsManagerEndpointSecurityGroup = new ec2.SecurityGroup(
-      this,
-      "SecretsManagerEndpointSecurityGroup",
-      {
-        vpc,
-        description:
-          "Security group for Secrets Manager VPC endpoint to allow access from Lambda",
-        allowAllOutbound: true,
-      },
-    );
-
-    secretsManagerEndpointSecurityGroup.addIngressRule(
-      lambdaSecurityGroup,
-      ec2.Port.tcp(443),
-      "Allow Lambda to access Secrets Manager VPC endpoint on port 443",
-    );
-
-    vpc.addInterfaceEndpoint("SecretsManagerEndpoint", {
-      service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
-      subnets: {
-        subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-      },
-      securityGroups: [secretsManagerEndpointSecurityGroup],
-      privateDnsEnabled: true,
-    });
-
-    const rdsInstance = new rds.DatabaseInstance(this, "ProfileDatabase", {
-      vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-      },
-      securityGroups: [databaseSecurityGroup],
-      engine: rds.DatabaseInstanceEngine.postgres({
-        version: rds.PostgresEngineVersion.VER_16_6,
-      }),
-      instanceType: ec2.InstanceType.of(
-        ec2.InstanceClass.T3,
-        ec2.InstanceSize.MICRO,
-      ),
-
-      credentials: rds.Credentials.fromGeneratedSecret("postgres"), // Auto-generate a secret for the database credentials
-      databaseName: "jobtailor",
-      allocatedStorage: 20,
-      maxAllocatedStorage: 100,
-      publiclyAccessible: false,
-      multiAz: false,
-      deletionProtection: false,
-      removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT recommended for production environments
-      deleteAutomatedBackups: true,
-    });
-
-    // Create the Lambda function for the profile service
+    // --- Profile service Lambda ---
     const profileServiceHandler = new Function(this, "ProfileServiceHandler", {
       runtime: Runtime.PYTHON_3_12,
       handler: "index.handler",
       code: Code.fromAsset("lambda/profile-service"),
-      vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-      },
-      timeout: cdk.Duration.seconds(10),
-      securityGroups: [lambdaSecurityGroup],
+      timeout: cdk.Duration.seconds(15), // occasional single embedding call on save
       environment: {
-        DB_HOST: rdsInstance.dbInstanceEndpointAddress,
-        DB_PORT: rdsInstance.dbInstanceEndpointPort,
-        DB_NAME: "jobtailor",
-        DB_SECRET_ARN: rdsInstance.secret?.secretArn || "", // Pass the RDS secret ARN to the Lambda function for secure access to database credentials
+        PROFILES_TABLE_NAME: profilesTable.tableName,
+        ...bedrockEnv,
       },
     });
+    profilesTable.grantReadWriteData(profileServiceHandler);
+    profileServiceHandler.addToRolePolicy(bedrockInvokePolicy);
 
+    // --- Job description service Lambda ---
     const jobDescriptionServiceHandler = new Function(
       this,
       "JobDescriptionServiceHandler",
@@ -130,21 +72,19 @@ export class InfraStack extends cdk.Stack {
         runtime: Runtime.PYTHON_3_12,
         handler: "index.handler",
         code: Code.fromAsset("lambda/job-service"),
-        vpc,
-        vpcSubnets: {
-          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-        },
-        timeout: cdk.Duration.seconds(10),
-        securityGroups: [lambdaSecurityGroup],
+        timeout: cdk.Duration.seconds(15),
         environment: {
-          DB_HOST: rdsInstance.dbInstanceEndpointAddress,
-          DB_PORT: rdsInstance.dbInstanceEndpointPort,
-          DB_NAME: "jobtailor",
-          DB_SECRET_ARN: rdsInstance.secret?.secretArn || "",
+          JOB_DESCRIPTIONS_TABLE_NAME: jobDescriptionsTable.tableName,
+          ...bedrockEnv,
         },
       },
     );
+    jobDescriptionsTable.grantReadWriteData(jobDescriptionServiceHandler);
+    jobDescriptionServiceHandler.addToRolePolicy(bedrockInvokePolicy);
 
+    // --- Tailoring service Lambda ---
+    // Read-only on both tables — it never writes a profile or a job description,
+    // only looks them up.
     const tailoringServiceHandler = new Function(
       this,
       "TailoringServiceHandler",
@@ -152,45 +92,19 @@ export class InfraStack extends cdk.Stack {
         runtime: Runtime.PYTHON_3_12,
         handler: "index.handler",
         code: Code.fromAsset("lambda/tailoring-service"),
-        vpc,
-        vpcSubnets: {
-          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-        },
-        timeout: cdk.Duration.seconds(10),
-        securityGroups: [lambdaSecurityGroup],
+        timeout: cdk.Duration.seconds(30), // generation call + at most one ad-hoc JD embedding
         environment: {
-          DB_HOST: rdsInstance.dbInstanceEndpointAddress,
-          DB_PORT: rdsInstance.dbInstanceEndpointPort,
-          DB_NAME: "jobtailor",
-          DB_SECRET_ARN: rdsInstance.secret?.secretArn || "",
+          PROFILES_TABLE_NAME: profilesTable.tableName,
+          JOB_DESCRIPTIONS_TABLE_NAME: jobDescriptionsTable.tableName,
+          ...bedrockEnv,
         },
       },
     );
+    profilesTable.grantReadData(tailoringServiceHandler);
+    jobDescriptionsTable.grantReadData(tailoringServiceHandler);
+    tailoringServiceHandler.addToRolePolicy(bedrockInvokePolicy);
 
-    const cvServiceHandler = new Function(this, "CvServiceHandler", {
-      runtime: Runtime.PYTHON_3_12,
-      handler: "index.handler",
-      code: Code.fromAsset("lambda/cv-service"),
-      vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-      },
-      timeout: cdk.Duration.seconds(10),
-      securityGroups: [lambdaSecurityGroup],
-      environment: {
-        DB_HOST: rdsInstance.dbInstanceEndpointAddress,
-        DB_PORT: rdsInstance.dbInstanceEndpointPort,
-        DB_NAME: "jobtailor",
-        DB_SECRET_ARN: rdsInstance.secret?.secretArn || "",
-      },
-    });
-
-    rdsInstance.secret?.grantRead(profileServiceHandler);
-    rdsInstance.secret?.grantRead(jobDescriptionServiceHandler);
-    rdsInstance.secret?.grantRead(tailoringServiceHandler);
-    rdsInstance.secret?.grantRead(cvServiceHandler);
-
-    // Create the HTTP API Gateway and integrate it with the Lambda function
+    // --- HTTP API Gateway ---
     const api = new HttpApi(this, "ProfileServiceApi", {
       apiName: "profileservice-http-api",
       corsPreflight: {
@@ -225,6 +139,15 @@ export class InfraStack extends cdk.Stack {
     });
 
     api.addRoutes({
+      path: "/job-description/list",
+      methods: [cdk.aws_apigatewayv2.HttpMethod.GET],
+      integration: new HttpLambdaIntegration(
+        "JobDescriptionListIntegration",
+        jobDescriptionServiceHandler,
+      ),
+    });
+
+    api.addRoutes({
       path: "/tailor-preview",
       methods: [cdk.aws_apigatewayv2.HttpMethod.POST],
       integration: new HttpLambdaIntegration(
@@ -234,24 +157,11 @@ export class InfraStack extends cdk.Stack {
     });
 
     api.addRoutes({
-      path: "/cv",
-      methods: [
-        cdk.aws_apigatewayv2.HttpMethod.GET,
-        cdk.aws_apigatewayv2.HttpMethod.PUT,
-        cdk.aws_apigatewayv2.HttpMethod.DELETE,
-      ],
+      path: "/tailor-generate",
+      methods: [cdk.aws_apigatewayv2.HttpMethod.POST],
       integration: new HttpLambdaIntegration(
-        "CvServiceHandlerIntegration",
-        cvServiceHandler,
-      ),
-    });
-
-    api.addRoutes({
-      path: "/cv/list",
-      methods: [cdk.aws_apigatewayv2.HttpMethod.GET],
-      integration: new HttpLambdaIntegration(
-        "CvServiceListIntegration",
-        cvServiceHandler,
+        "TailoringGenerateIntegration",
+        tailoringServiceHandler,
       ),
     });
 
