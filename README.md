@@ -232,8 +232,40 @@ now i need ot do 5. and 6.
 ```
 
 
---- 
+---
 
 ## Phase 2
 
-- 
+Phase 2 shifted focus from backend services to a real frontend, plus a persistence layer for the documents the frontend creates.
+
+#### Step-4: CV Dashboard (React + Vite)
+
+Built a `dashboard/` app (React, TypeScript, Vite) on a separate `PDF-Dashboard` branch, in parallel with the Step-3 tailoring work on `main`:
+
+- `LoginPage`, `MyCVsPage`, `CVBuilderPage` — pages for signing in, listing saved CVs, and editing one
+- `CVEditor` + `ModernTemplate` — structured CV editing with a rendered preview template
+- `exportPDF` util — client-side export of the rendered CV to PDF
+- `useCVStore` — app state (Zustand-style store) shared across the builder
+- `AISidebar` — panel of AI tool cards (job alignment, readability, ATS check, cover letter draft, etc.); currently UI-only placeholders ("Coming soon") not yet wired to the tailoring-service or Bedrock
+
+#### Step-5: CV persistence service
+
+Added a fourth Lambda, `cv-service`, so the dashboard has somewhere to save/load CVs:
+
+- `PUT /cv` — create or update a CV (`cv_data` stored as `JSONB`, keyed by `email`)
+- `GET /cv` — fetch one CV by `cv_id` + `email`
+- `GET /cv/list` — list a user's non-archived CVs, most recently updated first
+- `DELETE /cv` — soft-delete (`is_archived = TRUE`) rather than hard delete
+
+Same RDS instance and Secrets Manager access pattern as `profile-service`.
+
+#### Step-6: Merge frontend and backend
+
+- Wired the dashboard's `api/cvApi.ts` calls to the deployed `cv-service` endpoints and cleaned out files that had been accidentally committed
+- Merged `PDF-Dashboard` into `main` (PR #1), bringing the dashboard and all four backend services (`profile-service`, `job-service`, `tailoring-service`, `cv-service`) together for the first time
+
+### Current status
+
+- Working end-to-end: profile creation → job description capture → requirement extraction and skill/project matching (`tailoring-service`) → CV building and persistence in the dashboard
+- Not yet connected: the dashboard's `AISidebar` and job-alignment tools are still placeholders — they don't call `tailoring-service` yet, and there's no Bedrock-generated CV/cover-letter text produced from `prompt_context`
+- Next up: wire the dashboard to `tailoring-service`, and add the Bedrock call that turns `prompt_context` into actual tailored CV/cover letter copy 
