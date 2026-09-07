@@ -110,13 +110,22 @@ item without specifying whose partition to read from.
   similarity against the cached embedding are computed for *every* entry before
   any filtering — filtering by keyword score first (like the old functions do)
   would discard a paraphrase-only match before semantic scoring ever ran.
+- **`skills` is not an independent matching signal.** There's no
+  `match_skills`/skill embedding at all, in either route. Reasoning: a skill
+  worth matching on should already appear with context inside a project or
+  experience description — a bare skill tag with no supporting sentence is
+  weaker evidence than a description showing how it was used, and matching on
+  it separately would just be re-solving what `score_*` already covers via the
+  full job-description text. `skills` stays in profile storage as plain
+  strings, unembedded, for CV-display purposes only (the conventional
+  "Skills" tag section), not for scoring.
 
 ## Generation — ✅ implemented
 
 - `POST /tailor-generate` accepts `{email, job_id}` (a saved job) or
   `{email, company_name, job_title, raw_description}` (ad-hoc, never persisted).
 - Calls Bedrock **Claude Haiku 4.5** via the Converse API with matched
-  skills/projects/experience, explicitly instructed not to invent employers,
+  projects/experience, explicitly instructed not to invent employers,
   dates, or achievements not present in the input.
 - Returns `{title, summary, experience[]}` shaped to map onto the frontend's
   `CVData` — not yet wired into the dashboard (see Deferred).

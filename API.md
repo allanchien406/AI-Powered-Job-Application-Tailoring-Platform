@@ -87,7 +87,7 @@ Keyword-only match between a saved profile and a saved job description. No
 Bedrock calls — fast and free, meant for a live/frequent preview.
 
 - **Body:** `{email, job_id}` — both required, job must already be saved
-- **200:** `{message, email, job_id, extracted_requirements[], matched_skills[], matched_projects[], matched_experiences[], prompt_context}`
+- **200:** `{message, email, job_id, extracted_requirements[], matched_projects[], matched_experiences[], prompt_context}`
 - **400:** missing field · **404:** profile or job not found
 
 ### `POST /tailor-generate`
