@@ -9,6 +9,8 @@
   the very end of a long session.
 - Merge `develop` back into `main` via a PR when a change is ready, rather than
   merging directly, unless told otherwise.
+- Commit messages: keep the `Co-Authored-By: Claude ...` trailer, but leave out
+  the `Claude-Session:` link — don't include it in commits to this repo.
 
 ## Design documentation
 
