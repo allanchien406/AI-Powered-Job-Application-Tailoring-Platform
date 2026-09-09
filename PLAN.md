@@ -106,10 +106,18 @@ item without specifying whose partition to read from.
 
 - `/tailor-preview` keeps the original keyword-only scoring (`score_projects`,
   `score_experience`) — free, fast, zero Bedrock calls, unchanged behavior.
-- `/tailor-generate` uses `score_*_with_semantics`: keyword score **and** cosine
-  similarity against the cached embedding are computed for *every* entry before
-  any filtering — filtering by keyword score first (like the old functions do)
-  would discard a paraphrase-only match before semantic scoring ever ran.
+  Still the only thing bound by the `KNOWN_SKILLS` whitelist.
+- `/tailor-generate` uses `score_*_with_semantics`, which is **pure embedding
+  similarity — no keyword component at all.** This was a deliberate
+  simplification after the fact: the original design blended keyword score
+  with cosine similarity, but a literal keyword match (e.g. "AWS" appearing in
+  both texts) already scores highly on embedding similarity too, so the
+  keyword bonus was mostly reinforcing what semantic scoring already caught,
+  not adding independent signal. Every entry is scored and returned
+  unfiltered (no hard cutoff — there's no validated cosine-similarity
+  threshold yet; `build_prompt_context`'s top-3 cap does the filtering
+  instead), ranked purely by cosine similarity between the entry's cached
+  embedding and the JD's embedding.
 - **`skills` is not an independent matching signal.** There's no
   `match_skills`/skill embedding at all, in either route. Reasoning: a skill
   worth matching on should already appear with context inside a project or
@@ -127,6 +135,17 @@ item without specifying whose partition to read from.
 - Calls Bedrock **Claude Haiku 4.5** via the Converse API with matched
   projects/experience, explicitly instructed not to invent employers,
   dates, or achievements not present in the input.
+- **The prompt includes the actual raw JD text** (`raw_job_description` in
+  `prompt_context`), not a `KNOWN_SKILLS`-filtered keyword list. The original
+  design only ever gave the model `extracted_requirements` — a handful of
+  whitelist terms — never the real posting; the model was tailoring a CV
+  against a thin proxy, with no way to pick up on anything the JD asked for
+  outside that whitelist, or its actual tone/emphasis. Considered having a
+  separate LLM call summarize the JD first instead — rejected as an
+  unnecessary second Bedrock call solving a problem Claude Haiku doesn't have
+  (it can read a raw job posting directly in the same call); worth
+  reconsidering only if real JDs turn out to be long enough to strain the
+  prompt budget, which there's no evidence of yet.
 - Returns `{title, summary, experience[]}` shaped to map onto the frontend's
   `CVData` — not yet wired into the dashboard (see Deferred).
 

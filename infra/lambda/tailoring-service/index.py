@@ -15,10 +15,10 @@ bedrock_runtime = boto3.client("bedrock-runtime")
 # Whitelist of skill/technology terms this service knows how to spot in a raw
 # job description. Only terms in this list can ever end up in
 # `extracted_requirements` — anything a JD asks for that isn't here (or an
-# alias of something here) is invisible to the keyword-matching path. This is
-# the known limitation semantic scoring in /tailor-generate works around (it
-# compares against the full JD text directly, not just this whitelist), but
-# /tailor-preview has no alternative to it since it never calls Bedrock.
+# alias of something here) is invisible to the keyword-matching path. Used
+# only by /tailor-preview now: /tailor-generate's matching is pure embedding
+# similarity (no keyword component), and its generation prompt reads the raw
+# JD text directly rather than this whitelist-filtered proxy.
 KNOWN_SKILLS = [
     "aws",
     "azure",
@@ -62,13 +62,6 @@ SKILL_ALIASES = {
     "ci/cd": "ci/cd",
     "github actions": "github actions",
 }
-
-# Semantic score is a cosine similarity in [-1, 1]; this weight puts a strong
-# semantic match (~0.7+) roughly on par with matching two keyword terms.
-SEMANTIC_WEIGHT = 6
-# Low bar — a pure semantic match (0 keyword overlap) only needs a modest
-# cosine similarity to surface; this just filters out near-zero noise.
-MIN_TOTAL_SCORE = 0.5
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -117,9 +110,9 @@ def normalize_text(text):
 def extract_requirements_from_raw_description(raw_description):
     """Scan a job description's raw text for any KNOWN_SKILLS term (or one of
     its aliases) and return the canonical terms found. This is the entire
-    keyword-matching universe: /tailor-preview's scoring, and half of
-    /tailor-generate's blended scoring, both only ever "see" JD requirements
-    that show up in this list."""
+    keyword-matching universe: only /tailor-preview's scoring depends on it —
+    /tailor-generate's matching is pure embedding similarity and never calls
+    this at all (see score_entries_with_semantics)."""
     text = normalize_text(raw_description)
     extracted = []
 
@@ -247,7 +240,8 @@ def score_experience(profile, extracted_requirements):
     return scored_experiences
 
 
-# --- Semantic-augmented scoring: used by /tailor-generate only. ---
+# --- Pure-embedding scoring: used by /tailor-generate only. No keyword
+# component — see score_entries_with_semantics for why. ---
 
 
 def embed_text(text):
@@ -299,15 +293,17 @@ def cosine_similarity(vec_a, vec_b):
     return dot / (norm_a * norm_b)
 
 
-def score_entries_with_semantics(entries, extracted_requirements, jd_vector, title_field, description_field, title_weight, description_weight):
+def score_entries_with_semantics(entries, jd_vector, title_field, description_field):
     """The /tailor-generate counterpart to score_projects/score_experience:
-    computes BOTH a keyword score (same logic as the preview path) AND a
-    semantic score (cosine similarity between this entry's cached embedding
-    and the JD's embedding), and blends them into one total_score.
+    ranks every entry by pure cosine similarity between its cached embedding
+    and the JD's embedding — no keyword component at all (unlike
+    /tailor-preview, which stays keyword-only since it never calls Bedrock).
 
-    Score every entry on keyword AND semantic similarity, unfiltered, before
-    any cutoff — filtering by keyword score first (as score_projects/score_experience
-    do) would throw away a paraphrase-only match before semantic scoring ever runs.
+    Every entry is scored and returned, not filtered by a hard threshold:
+    there's no validated cutoff yet for what a "good" cosine similarity looks
+    like on real profile/JD pairs, so ranking plus build_prompt_context's
+    top-3 cap is safer than an arbitrary absolute score threshold picked
+    without data. Revisit once this has run against real embeddings.
     """
     scored = []
 
@@ -318,29 +314,17 @@ def score_entries_with_semantics(entries, extracted_requirements, jd_vector, tit
         title_text = entry.get(title_field, "")
         description_text = entry.get(description_field, "")
 
-        title_score, title_matches = score_text_against_requirements(title_text, extracted_requirements, title_weight)
-        description_score, description_matches = score_text_against_requirements(
-            description_text, extracted_requirements, description_weight
-        )
-        keyword_score = title_score + description_score
-
         entry_vector = to_float_vector(entry.get("embedding"))
         if entry_vector is None:
             # Safety net for entries saved before embeddings existed.
             entry_vector = embed_text(f"{title_text} {description_text}")
         semantic_score = cosine_similarity(jd_vector, entry_vector) if entry_vector else 0.0
 
-        total_score = keyword_score + semantic_score * SEMANTIC_WEIGHT
-        if total_score <= MIN_TOTAL_SCORE:
-            continue
-
         scored.append(
             {
                 title_field: title_text,
                 description_field: description_text,
-                "score": round(total_score, 2),
-                "matched_terms": dedupe_preserve_order(title_matches + description_matches),
-                "semantic_score": round(semantic_score, 3),
+                "score": round(semantic_score, 3),
             }
         )
 
@@ -348,25 +332,25 @@ def score_entries_with_semantics(entries, extracted_requirements, jd_vector, tit
     return scored
 
 
-def score_projects_with_semantics(profile, extracted_requirements, jd_vector):
+def score_projects_with_semantics(profile, jd_vector):
     """score_entries_with_semantics, specialized for the projects list."""
-    return score_entries_with_semantics(
-        profile.get("projects", []), extracted_requirements, jd_vector, "name", "description", 4, 3
-    )
+    return score_entries_with_semantics(profile.get("projects", []), jd_vector, "name", "description")
 
 
-def score_experience_with_semantics(profile, extracted_requirements, jd_vector):
+def score_experience_with_semantics(profile, jd_vector):
     """score_entries_with_semantics, specialized for the experience list."""
-    return score_entries_with_semantics(
-        profile.get("experience", []), extracted_requirements, jd_vector, "title", "description", 4, 2
-    )
+    return score_entries_with_semantics(profile.get("experience", []), jd_vector, "title", "description")
 
 
-def build_prompt_context(profile, job_description, extracted_requirements, matched_projects, matched_experiences):
+def build_prompt_context(profile, job_description, matched_projects, matched_experiences):
     """Assemble the compact payload sent to Bedrock for generation: who the
-    candidate is, what role they're targeting, and only the top few
+    candidate is, what role they're targeting, the actual job description
+    text (not a keyword-extracted proxy — the model reads the real posting
+    directly rather than a KNOWN_SKILLS-filtered list), and only the top few
     highest-scored projects/experience entries (capped at 3 each) rather than
-    the candidate's whole profile."""
+    the candidate's whole profile. Shared with /tailor-preview's response too
+    (which never sends this to Bedrock — it's returned for reference only),
+    so both routes describe "what would be sent to the model" the same way."""
     return {
         "candidate": {
             "full_name": profile.get("full_name", ""),
@@ -376,7 +360,7 @@ def build_prompt_context(profile, job_description, extracted_requirements, match
             "company_name": job_description.get("company_name", ""),
             "job_title": job_description.get("job_title", ""),
         },
-        "job_requirements": extracted_requirements,
+        "raw_job_description": job_description.get("raw_description", ""),
         "matched_projects": matched_projects[:3],
         "matched_experiences": matched_experiences[:3],
     }
@@ -434,9 +418,7 @@ def handle_tailor_preview(event):
     extracted_requirements = extract_requirements_from_raw_description(job_description["raw_description"])
     matched_projects = score_projects(profile, extracted_requirements)
     matched_experiences = score_experience(profile, extracted_requirements)
-    prompt_context = build_prompt_context(
-        profile, job_description, extracted_requirements, matched_projects, matched_experiences
-    )
+    prompt_context = build_prompt_context(profile, job_description, matched_projects, matched_experiences)
 
     return response(
         200,
@@ -455,8 +437,10 @@ def handle_tailor_preview(event):
 def handle_tailor_generate(event):
     """POST /tailor-generate: the full pipeline. Accepts either a saved
     {email, job_id} or an ad-hoc {email, company_name, job_title,
-    raw_description} that's never persisted. Does semantic+keyword matching,
-    then calls Bedrock to produce an actual tailored CV section."""
+    raw_description} that's never persisted. Matching is pure embedding
+    similarity (no keyword component — see score_entries_with_semantics),
+    then calls Bedrock, which reads the actual JD text directly, to produce
+    an actual tailored CV section."""
     data = json.loads(event.get("body") or "{}")
     email = data.get("email")
 
@@ -482,12 +466,9 @@ def handle_tailor_generate(event):
         job_description = {key: data[key] for key in ("company_name", "job_title", "raw_description")}
         jd_vector = embed_text(job_description["raw_description"])
 
-    extracted_requirements = extract_requirements_from_raw_description(job_description["raw_description"])
-    matched_projects = score_projects_with_semantics(profile, extracted_requirements, jd_vector)
-    matched_experiences = score_experience_with_semantics(profile, extracted_requirements, jd_vector)
-    prompt_context = build_prompt_context(
-        profile, job_description, extracted_requirements, matched_projects, matched_experiences
-    )
+    matched_projects = score_projects_with_semantics(profile, jd_vector)
+    matched_experiences = score_experience_with_semantics(profile, jd_vector)
+    prompt_context = build_prompt_context(profile, job_description, matched_projects, matched_experiences)
 
     try:
         generated_cv = call_bedrock_for_tailoring(prompt_context)
