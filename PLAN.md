@@ -194,9 +194,16 @@ item without specifying whose partition to read from.
   reuses an unchanged entry's embedding byte-for-byte while correctly
   re-embedding an edited one, and all error paths (404/400) behave as
   expected. CloudWatch logs clean across every test call.
-- 🚧 **`job-service`** — code-reviewed and fixed, not yet deployed/AWS-verified.
-  Next step: staged deploy (own throwaway branch off `develop`, same process as
-  `profile-service`) and a manual test pass before marking ✅.
+- ✅ **`job-service`** — added to the same staged stack (`test/deploy-profile-service`,
+  now covering both services) and manually verified: `PUT`/`GET`/`GET .../list`
+  all round-trip correctly, email is normalized (`"  Allan@Example.com  "` →
+  `"allan@example.com"`, confirmed in the stored item), a real embedding is
+  stored (1024-dim, confirmed via raw DynamoDB read), blank-after-trim fields
+  are rejected (400) instead of silently stored, a nonexistent `job_id` 404s,
+  and a different email against the same `job_id` also 404s — confirming the
+  partition-key scoping is structural, not just an unchecked assumption.
+  CloudWatch logs clean across every test call. Confirmed independently via
+  the manual test plan, per the testing workflow.
 - Not yet reviewed, deployed, or verified: `tailoring-service`.
 
 ## Deferred / explicitly out of scope

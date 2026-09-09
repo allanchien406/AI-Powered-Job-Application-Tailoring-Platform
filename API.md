@@ -41,8 +41,7 @@ Create or fully replace a profile (upsert by `email`).
 ---
 
 ## `job-service` — ✅ reviewed (fixed: graceful degradation on embedding
-failure, email normalization, stricter field validation) — not yet
-AWS-verified
+failure, email normalization, stricter field validation) · AWS-verified
 
 Source: `infra/lambda/job-service/index.py`. Storage: `JobDescriptionsTable`
 (DynamoDB, partition key `email`, sort key `job_id`).
