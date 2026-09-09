@@ -40,7 +40,9 @@ Create or fully replace a profile (upsert by `email`).
 
 ---
 
-## `job-service` — 👀 not yet reviewed
+## `job-service` — ✅ reviewed (fixed: graceful degradation on embedding
+failure, email normalization, stricter field validation) — not yet
+AWS-verified
 
 Source: `infra/lambda/job-service/index.py`. Storage: `JobDescriptionsTable`
 (DynamoDB, partition key `email`, sort key `job_id`).
@@ -53,18 +55,30 @@ Fetch one saved job description.
 - **200:** `{email, job_id, company_name, job_title, raw_description, created_at}`
   (embedding stripped)
 - **400:** missing param · **404:** not found for that email/job_id pair
+- **Note:** `email` is matched exactly against what's stored — this route does
+  not normalize its own `email` query param (matches `profile-service`'s `GET`,
+  which has the same asymmetry; see `PLAN.md`).
 
 ### `PUT /job-description`
 
 Save a new job description. Always creates a new item (no update-in-place —
-`job_id` is generated fresh every call).
+`job_id` is generated fresh every call, so there's no dedup against an
+existing entry for the same job).
 
-- **Body:** `{email, company_name, job_title, raw_description}` — all required
+- **Body:** `{email, company_name, job_title, raw_description}` — all required,
+  all trimmed of whitespace before validation (a whitespace-only value is
+  rejected, not silently stored)
 - **200:** `{message, job_id, email, company_name, job_title}` — `job_id` is a
-  generated UUID string
-- **400:** any required field missing
+  generated UUID string, `email` is lowercased+trimmed before storage — plus
+  `embedding_warnings: string[]` **only if** embedding `raw_description` failed
+  (save still succeeds either way, mirroring `profile-service`'s
+  graceful-degradation pattern)
+- **400:** any required field missing/blank
 - **Behavior worth knowing:** `raw_description`'s embedding is computed once
   here, at save time, and cached on the item for `tailoring-service` to reuse.
+  If that embedding call fails, there's no "next save" to retry it on (unlike
+  `profile-service`'s entries) — `tailoring-service` falls back to embedding it
+  inline at match time instead.
 
 ### `GET /job-description/list`
 

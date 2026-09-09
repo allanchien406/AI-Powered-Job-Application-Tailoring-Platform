@@ -143,6 +143,21 @@ item without specifying whose partition to read from.
   cached," so the next successful save automatically retries it.
 - ✅ **Entry matching for the embedding cache is name/title-based**, not
   array-position-based (see the Embedding cache section above).
+- ✅ **`job-service` reviewed** — three fixes applied to match patterns already
+  established in `profile-service`: (1) graceful degradation on embedding
+  failure, same shape as `profile-service`'s but *without* the caching/reuse
+  machinery — `attach_embeddings` solves a problem (multiple embeddable
+  sub-entries, re-saved over time) that doesn't apply here, since a job
+  description has one embeddable field and is never updated in place (every
+  `PUT` mints a fresh `job_id`); the only real gap was that `embed_text`'s
+  failure wasn't caught at all, so a Bedrock hiccup failed the whole save. (2)
+  `email` is now normalized (`.strip().lower()`) on `PUT`, matching
+  `profile-service` — previously job descriptions could be saved with
+  inconsistent casing/whitespace relative to how the profile they belong to
+  was keyed, risking silent lookup mismatches in `tailoring-service` (which
+  takes one `email` and looks it up in both tables). (3) `company_name`/
+  `job_title`/`raw_description` are now trimmed and rejected if blank after
+  trimming, matching `profile-service`'s validation strictness.
 - ✅ **Staged, per-service AWS deployment.** Each Lambda gets deployed to real
   AWS only after it's passed code review — not the whole stack at once just
   because the code exists in the repo. Mechanically: a throwaway branch
@@ -179,8 +194,10 @@ item without specifying whose partition to read from.
   reuses an unchanged entry's embedding byte-for-byte while correctly
   re-embedding an edited one, and all error paths (404/400) behave as
   expected. CloudWatch logs clean across every test call.
-- Not yet deployed/verified: `job-service`, `tailoring-service` — pending code
-  review.
+- 🚧 **`job-service`** — code-reviewed and fixed, not yet deployed/AWS-verified.
+  Next step: staged deploy (own throwaway branch off `develop`, same process as
+  `profile-service`) and a manual test pass before marking ✅.
+- Not yet reviewed, deployed, or verified: `tailoring-service`.
 
 ## Deferred / explicitly out of scope
 
