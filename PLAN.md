@@ -216,8 +216,7 @@ item without specifying whose partition to read from.
     normalization, validation — actually runs): email normalization, the
     degradation path, and fence-stripping all confirmed correct when actually
     executed, not just read. `cdk synth` confirmed the resulting IAM policies
-    are scoped correctly per-service. Not yet deployed/AWS-verified — that's
-    the next step, same staged process as the other two services.
+    are scoped correctly per-service.
 
 ## Open decisions
 
@@ -239,6 +238,38 @@ item without specifying whose partition to read from.
 None currently outstanding. (See Resolved decisions below for the four
 `tailoring-service` bugs fixed together.)
 
+## External blocker (not a code bug — needs account/console action)
+
+- 🚫 **Claude Haiku 4.5 generation is blocked by an AWS Marketplace
+  subscription issue on this account**, confirmed during `tailoring-service`'s
+  AWS deploy verification. `POST /tailor-generate`'s final Bedrock call fails
+  with:
+  ```
+  AccessDeniedException: Model access is denied due to IAM user or service
+  role is not authorized to perform the required AWS Marketplace actions
+  (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe) to enable
+  access to this model... Your AWS Marketplace subscription for this model
+  cannot be completed at this time.
+  ```
+  Ruled out as an IAM/ARN/code issue: the model shows `ACTIVE` in
+  `aws bedrock list-foundation-models`, Titan Embeddings still works fine on
+  the same account (retested, 1024-dim vector returned), the IAM policy
+  attached to `TailoringServiceHandler`'s role exactly matches the ARNs `cdk
+  diff` predicted, and — critically — even the account's own admin user
+  (`iamadmin`, full permissions) gets the identical error calling this model
+  directly via the CLI. This is an account-level Marketplace subscription
+  state issue, not something fixable via IAM policy, CDK, or application code.
+  **Needs a human to check the Bedrock console's Model access page for this
+  account/region** (or AWS Marketplace subscription status directly) and
+  resolve whatever's blocking the subscription — a payment-method issue,
+  an incomplete access request, or an AWS-side glitch worth a support case if
+  the console shows access as already granted.
+  Everything else in the request pipeline is confirmed working right up to
+  this one call: routing, DynamoDB reads on both tables, email normalization,
+  embedding (Titan) calls, and the error-handling path itself — a failed
+  generation call returns a clean `502` with the AWS error code, not a crash,
+  on both the saved-job and ad-hoc paths.
+
 ## AWS verification status
 
 - ✅ **`profile-service`** — deployed to real AWS (account `681583877402`,
@@ -258,7 +289,15 @@ None currently outstanding. (See Resolved decisions below for the four
   partition-key scoping is structural, not just an unchecked assumption.
   CloudWatch logs clean across every test call. Confirmed independently via
   the manual test plan, per the testing workflow.
-- Not yet reviewed, deployed, or verified: `tailoring-service`.
+- 🚧 **`tailoring-service`** — deployed to the same staged stack and partially
+  verified: `POST /tailor-preview` works end to end (keyword matching,
+  `prompt_context` with `raw_job_description`, zero Bedrock calls). `POST
+  /tailor-generate` confirmed correct up through matching and embedding on
+  both the saved-job and ad-hoc paths, and its error handling degrades
+  cleanly to a `502` — but the final generation call itself is blocked by the
+  external Marketplace issue above, so the actual `generated_cv` output is
+  **not yet verified**. Not marked ✅ until that's resolved and a real
+  generation response has been checked.
 
 ## Deferred / explicitly out of scope
 
