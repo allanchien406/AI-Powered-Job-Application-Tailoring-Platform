@@ -9,6 +9,8 @@
   the very end of a long session.
 - Merge `develop` back into `main` via a PR when a change is ready, rather than
   merging directly, unless told otherwise.
+- Commit messages: no Claude attribution trailers at all — no `Co-Authored-By`,
+  no `Claude-Session:` link. Just the commit message itself.
 
 ## Design documentation
 
@@ -22,3 +24,22 @@
 - Keep `PLAN.md`'s status markers current (✅ done · 🚧 decided, not yet built ·
   ❓ open decision · ⏸ deferred) — move items between sections as they progress
   rather than leaving stale status sitting there.
+
+## Testing & verification workflow
+
+When a change needs functional verification — deploying and hitting a real
+endpoint, running a demo UI, exercising an actual data flow — not just a
+type-check or a code read-through:
+
+1. Run and verify it yourself first (deploy it, curl it, drive it with a
+   headless browser, check the logs — whatever actually proves it works),
+   the same standard as everywhere else in this repo's work so far.
+2. Hand back a concrete, step-by-step plan for how to run the same test
+   manually, so the result can be independently reproduced and confirmed —
+   don't just report "verified" and stop there.
+3. Wait for confirmation that the manual test actually passed before treating
+   the change as done. Verifying it yourself first is what makes the manual
+   plan trustworthy to hand off — it isn't a substitute for that confirmation.
+4. Only after that confirmation: update `PLAN.md`'s status for the
+   thing being tested and commit/push. Don't mark something ✅ verified (in
+   `PLAN.md` or in conversation) off the back of your own test run alone.

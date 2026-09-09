@@ -110,13 +110,22 @@ item without specifying whose partition to read from.
   similarity against the cached embedding are computed for *every* entry before
   any filtering — filtering by keyword score first (like the old functions do)
   would discard a paraphrase-only match before semantic scoring ever ran.
+- **`skills` is not an independent matching signal.** There's no
+  `match_skills`/skill embedding at all, in either route. Reasoning: a skill
+  worth matching on should already appear with context inside a project or
+  experience description — a bare skill tag with no supporting sentence is
+  weaker evidence than a description showing how it was used, and matching on
+  it separately would just be re-solving what `score_*` already covers via the
+  full job-description text. `skills` stays in profile storage as plain
+  strings, unembedded, for CV-display purposes only (the conventional
+  "Skills" tag section), not for scoring.
 
 ## Generation — ✅ implemented
 
 - `POST /tailor-generate` accepts `{email, job_id}` (a saved job) or
   `{email, company_name, job_title, raw_description}` (ad-hoc, never persisted).
 - Calls Bedrock **Claude Haiku 4.5** via the Converse API with matched
-  skills/projects/experience, explicitly instructed not to invent employers,
+  projects/experience, explicitly instructed not to invent employers,
   dates, or achievements not present in the input.
 - Returns `{title, summary, experience[]}` shaped to map onto the frontend's
   `CVData` — not yet wired into the dashboard (see Deferred).
@@ -134,6 +143,61 @@ item without specifying whose partition to read from.
   cached," so the next successful save automatically retries it.
 - ✅ **Entry matching for the embedding cache is name/title-based**, not
   array-position-based (see the Embedding cache section above).
+- ✅ **`job-service` reviewed** — three fixes applied to match patterns already
+  established in `profile-service`: (1) graceful degradation on embedding
+  failure, same shape as `profile-service`'s but *without* the caching/reuse
+  machinery — `attach_embeddings` solves a problem (multiple embeddable
+  sub-entries, re-saved over time) that doesn't apply here, since a job
+  description has one embeddable field and is never updated in place (every
+  `PUT` mints a fresh `job_id`); the only real gap was that `embed_text`'s
+  failure wasn't caught at all, so a Bedrock hiccup failed the whole save. (2)
+  `email` is now normalized (`.strip().lower()`) on `PUT`, matching
+  `profile-service` — previously job descriptions could be saved with
+  inconsistent casing/whitespace relative to how the profile they belong to
+  was keyed, risking silent lookup mismatches in `tailoring-service` (which
+  takes one `email` and looks it up in both tables). (3) `company_name`/
+  `job_title`/`raw_description` are now trimmed and rejected if blank after
+  trimming, matching `profile-service`'s validation strictness.
+- ✅ **Staged, per-service AWS deployment.** Each Lambda gets deployed to real
+  AWS only after it's passed code review — not the whole stack at once just
+  because the code exists in the repo. Mechanically: a throwaway branch
+  (e.g. `test/deploy-profile-service`) branches off `develop` and trims
+  `infra-stack.ts` down to only the reviewed service(s); `develop` itself always
+  keeps the full, accurate architecture. The throwaway branch is never merged
+  back — restoring the full stack means returning to `develop`'s version of
+  `infra-stack.ts` once every service has passed review. If a bug is found
+  during real-AWS testing, the fix goes on `develop` (the real source of
+  truth), then gets pulled into the test branch with `git merge develop`
+  before redeploying.
+
+## Known bugs found during AWS verification
+
+- 🐛 **`BEDROCK_MODEL_ID`'s value is wrong for Claude Haiku 4.5.** A direct
+  `bedrock-runtime converse` test call against `anthropic.claude-haiku-4-5-20251001-v1:0`
+  failed: `ValidationException: Invocation of model ID ... with on-demand
+  throughput isn't supported. Retry your request with the ID or ARN of an
+  inference profile`. The correct value is the inference profile ID
+  `us.anthropic.claude-haiku-4-5-20251001-v1:0` (confirmed via
+  `aws bedrock list-inference-profiles`). This also means the IAM policy
+  resource ARN in `infra-stack.ts` (currently
+  `arn:aws:bedrock:{region}::foundation-model/{id}`) is the wrong ARN shape for
+  an inference profile and needs updating too. Doesn't block `profile-service`
+  (which only uses Titan Embeddings, confirmed working) — needs fixing before
+  `tailoring-service`'s generation call can work.
+
+## AWS verification status
+
+- ✅ **`profile-service`** — deployed to real AWS (account `681583877402`,
+  `us-east-1`) via the staged process above and manually verified: `PUT`/`GET
+  /profile` round-trip correctly, embeddings are real (1024-dim, confirmed by
+  reading the raw DynamoDB item) and hidden from API responses, the cache
+  reuses an unchanged entry's embedding byte-for-byte while correctly
+  re-embedding an edited one, and all error paths (404/400) behave as
+  expected. CloudWatch logs clean across every test call.
+- 🚧 **`job-service`** — code-reviewed and fixed, not yet deployed/AWS-verified.
+  Next step: staged deploy (own throwaway branch off `develop`, same process as
+  `profile-service`) and a manual test pass before marking ✅.
+- Not yet reviewed, deployed, or verified: `tailoring-service`.
 
 ## Deferred / explicitly out of scope
 

@@ -112,11 +112,6 @@ def extract_requirements_from_raw_description(raw_description):
     return extracted
 
 
-def canonicalize_skill(skill):
-    normalized = normalize_text(skill)
-    return SKILL_ALIASES.get(normalized, normalized)
-
-
 def dedupe_preserve_order(items):
     seen = set()
     result = []
@@ -127,14 +122,6 @@ def dedupe_preserve_order(items):
             result.append(item)
 
     return result
-
-
-def match_skills(profile, extracted_requirements):
-    raw_skills = profile.get("skills", [])
-    normalized_profile_skills = [canonicalize_skill(skill) for skill in raw_skills if isinstance(skill, str)]
-    normalized_profile_skills = dedupe_preserve_order(normalized_profile_skills)
-
-    return [requirement for requirement in extracted_requirements if requirement in normalized_profile_skills]
 
 
 def score_text_against_requirements(text, extracted_requirements, weight):
@@ -316,7 +303,7 @@ def score_experience_with_semantics(profile, extracted_requirements, jd_vector):
     )
 
 
-def build_prompt_context(profile, job_description, extracted_requirements, matched_skills, matched_projects, matched_experiences):
+def build_prompt_context(profile, job_description, extracted_requirements, matched_projects, matched_experiences):
     return {
         "candidate": {
             "full_name": profile.get("full_name", ""),
@@ -327,7 +314,6 @@ def build_prompt_context(profile, job_description, extracted_requirements, match
             "job_title": job_description.get("job_title", ""),
         },
         "job_requirements": extracted_requirements,
-        "matched_skills": matched_skills[:5],
         "matched_projects": matched_projects[:3],
         "matched_experiences": matched_experiences[:3],
     }
@@ -335,12 +321,12 @@ def build_prompt_context(profile, job_description, extracted_requirements, match
 
 def call_bedrock_for_tailoring(prompt_context):
     system_prompt = (
-        "You are a CV tailoring assistant. Given a candidate's matched skills, projects, "
-        "and experience and a target job, produce a tailored CV section. "
+        "You are a CV tailoring assistant. Given a candidate's matched projects and "
+        "experience and a target job, produce a tailored CV section. "
         "Respond with ONLY valid JSON matching this schema: "
         '{"title": string, "summary": string, "experience": '
         '[{"company": string, "role": string, "period": string, "description": string}]}. '
-        "Only use facts present in the candidate's matched projects, experience, and skills "
+        "Only use facts present in the candidate's matched projects and experience "
         "below — do not invent employers, dates, or achievements that are not present in the input."
     )
 
@@ -375,11 +361,10 @@ def handle_tailor_preview(event):
         return response(404, {"error": "Job description not found"})
 
     extracted_requirements = extract_requirements_from_raw_description(job_description["raw_description"])
-    matched_skills = match_skills(profile, extracted_requirements)
     matched_projects = score_projects(profile, extracted_requirements)
     matched_experiences = score_experience(profile, extracted_requirements)
     prompt_context = build_prompt_context(
-        profile, job_description, extracted_requirements, matched_skills, matched_projects, matched_experiences
+        profile, job_description, extracted_requirements, matched_projects, matched_experiences
     )
 
     return response(
@@ -389,7 +374,6 @@ def handle_tailor_preview(event):
             "email": email,
             "job_id": job_id,
             "extracted_requirements": extracted_requirements,
-            "matched_skills": matched_skills,
             "matched_projects": matched_projects,
             "matched_experiences": matched_experiences,
             "prompt_context": prompt_context,
@@ -421,11 +405,10 @@ def handle_tailor_generate(event):
         jd_vector = embed_text(job_description["raw_description"])
 
     extracted_requirements = extract_requirements_from_raw_description(job_description["raw_description"])
-    matched_skills = match_skills(profile, extracted_requirements)
     matched_projects = score_projects_with_semantics(profile, extracted_requirements, jd_vector)
     matched_experiences = score_experience_with_semantics(profile, extracted_requirements, jd_vector)
     prompt_context = build_prompt_context(
-        profile, job_description, extracted_requirements, matched_skills, matched_projects, matched_experiences
+        profile, job_description, extracted_requirements, matched_projects, matched_experiences
     )
 
     try:

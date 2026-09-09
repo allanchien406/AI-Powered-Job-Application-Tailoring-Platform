@@ -59,17 +59,32 @@ def strip_embedding(job_description):
 
 def save_job_description(table, email, company_name, job_title, raw_description):
     job_id = str(uuid.uuid4())
+    warnings = []
+
+    try:
+        embedding = embed_text(raw_description)
+    except Exception as exc:
+        # Broad on purpose: whatever went wrong with Bedrock, the job
+        # description itself must still get saved. Unlike profile-service,
+        # there's no "next save" to retry on here (job descriptions are
+        # never updated in place, per API.md) - the actual fallback is
+        # tailoring-service embedding this on the fly at match time when it
+        # finds no cached vector.
+        print(f"embed_text failed for job_id {job_id!r}: {exc}")
+        embedding = None
+        warnings.append("raw_description: embedding failed, will be computed on the fly when this job is used for tailoring")
+
     item = {
         "email": email,
         "job_id": job_id,
         "company_name": company_name,
         "job_title": job_title,
         "raw_description": raw_description,
-        "embedding": embed_text(raw_description),
+        "embedding": embedding,
         "created_at": now_iso(),
     }
     table.put_item(Item=item)
-    return item
+    return item, warnings
 
 
 def get_job_description_by_id(table, email, job_id):
@@ -117,10 +132,10 @@ def handler(event, context):
             body = event.get("body")
             data = json.loads(body) if body else {}
 
-            email = data.get("email")
-            company_name = data.get("company_name")
-            job_title = data.get("job_title")
-            raw_description = data.get("raw_description")
+            email = (data.get("email") or "").strip().lower()
+            company_name = (data.get("company_name") or "").strip()
+            job_title = (data.get("job_title") or "").strip()
+            raw_description = (data.get("raw_description") or "").strip()
 
             if not email:
                 return response(400, {"error": "email is required"})
@@ -131,18 +146,19 @@ def handler(event, context):
             if not raw_description:
                 return response(400, {"error": "raw_description is required"})
 
-            item = save_job_description(table, email, company_name, job_title, raw_description)
+            item, embedding_warnings = save_job_description(table, email, company_name, job_title, raw_description)
 
-            return response(
-                200,
-                {
-                    "message": "Job description saved successfully",
-                    "job_id": item["job_id"],
-                    "email": email,
-                    "company_name": company_name,
-                    "job_title": job_title,
-                },
-            )
+            result = {
+                "message": "Job description saved successfully",
+                "job_id": item["job_id"],
+                "email": email,
+                "company_name": company_name,
+                "job_title": job_title,
+            }
+            if embedding_warnings:
+                result["embedding_warnings"] = embedding_warnings
+
+            return response(200, result)
 
         return response(405, {"error": f"Method {http_method} not allowed"})
 
