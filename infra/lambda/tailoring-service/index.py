@@ -12,6 +12,13 @@ dynamodb = boto3.resource("dynamodb")
 bedrock_runtime = boto3.client("bedrock-runtime")
 
 
+# Whitelist of skill/technology terms this service knows how to spot in a raw
+# job description. Only terms in this list can ever end up in
+# `extracted_requirements` — anything a JD asks for that isn't here (or an
+# alias of something here) is invisible to the keyword-matching path. This is
+# the known limitation semantic scoring in /tailor-generate works around (it
+# compares against the full JD text directly, not just this whitelist), but
+# /tailor-preview has no alternative to it since it never calls Bedrock.
 KNOWN_SKILLS = [
     "aws",
     "azure",
@@ -44,6 +51,9 @@ KNOWN_SKILLS = [
 ]
 
 
+# Spelling/phrasing variants that should count as the same requirement as
+# their canonical KNOWN_SKILLS entry (e.g. "postgres" and "ci cd" both mean
+# the KNOWN_SKILLS terms "postgresql" and "ci/cd").
 SKILL_ALIASES = {
     "postgres": "postgresql",
     "postgresql": "postgresql",
@@ -62,6 +72,9 @@ MIN_TOTAL_SCORE = 0.5
 
 
 class DecimalEncoder(json.JSONEncoder):
+    """DynamoDB returns numbers as Decimal; json.dumps doesn't know how to
+    serialize those, so convert to float only at the response boundary."""
+
     def default(self, o):
         if isinstance(o, Decimal):
             return float(o)
@@ -69,6 +82,7 @@ class DecimalEncoder(json.JSONEncoder):
 
 
 def response(status_code, body):
+    """Build the API Gateway HTTP API Lambda-proxy response shape."""
     return {
         "statusCode": status_code,
         "headers": {"content-type": "application/json"},
@@ -85,18 +99,27 @@ def job_descriptions_table():
 
 
 def get_profile_by_email(email):
+    """Read-only lookup — this service never writes to ProfilesTable."""
     return profiles_table().get_item(Key={"email": email}).get("Item")
 
 
 def get_job_description_by_id(email, job_id):
+    """Read-only lookup — this service never writes to JobDescriptionsTable."""
     return job_descriptions_table().get_item(Key={"email": email, "job_id": job_id}).get("Item")
 
 
 def normalize_text(text):
+    """Lowercase and collapse whitespace, so substring matching below isn't
+    thrown off by casing or line breaks."""
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
 def extract_requirements_from_raw_description(raw_description):
+    """Scan a job description's raw text for any KNOWN_SKILLS term (or one of
+    its aliases) and return the canonical terms found. This is the entire
+    keyword-matching universe: /tailor-preview's scoring, and half of
+    /tailor-generate's blended scoring, both only ever "see" JD requirements
+    that show up in this list."""
     text = normalize_text(raw_description)
     extracted = []
 
@@ -113,6 +136,8 @@ def extract_requirements_from_raw_description(raw_description):
 
 
 def dedupe_preserve_order(items):
+    """Remove duplicates while keeping first-seen order (plain set() would
+    lose the ordering that ranking/display relies on)."""
     seen = set()
     result = []
 
@@ -125,6 +150,10 @@ def dedupe_preserve_order(items):
 
 
 def score_text_against_requirements(text, extracted_requirements, weight):
+    """Count how many extracted requirement terms appear as a literal
+    substring of `text`, each worth `weight` points. Returns the total score
+    plus which specific terms matched (for the matched_terms field shown to
+    the caller)."""
     if not isinstance(text, str):
         return 0, []
 
@@ -145,6 +174,12 @@ def score_text_against_requirements(text, extracted_requirements, weight):
 
 
 def score_projects(profile, extracted_requirements):
+    """Score every project by literal keyword overlap with the JD (title
+    weighted higher than description), keep only the ones that matched
+    something, and return them sorted best-first. No embeddings involved —
+    a project with zero literal keyword overlap never shows up here, even if
+    it's a strong paraphrased match (that's what the *_with_semantics
+    versions below exist to catch, for /tailor-generate only)."""
     projects = profile.get("projects", [])
     scored_projects = []
 
@@ -178,6 +213,8 @@ def score_projects(profile, extracted_requirements):
 
 
 def score_experience(profile, extracted_requirements):
+    """Same as score_projects, but for the profile's experience entries (and
+    a lower description weight — see the 2 vs 3 in the weight arguments)."""
     experiences = profile.get("experience", [])
     scored_experiences = []
 
@@ -214,6 +251,12 @@ def score_experience(profile, extracted_requirements):
 
 
 def embed_text(text):
+    """Call Bedrock Titan Embeddings and return the raw embedding as a plain
+    list of floats. Used here for two things: embedding an ad-hoc (never
+    persisted) job description, and as a fallback for any profile entry that
+    somehow has no cached embedding of its own. Unlike profile-service's/
+    job-service's embed_text, this one never writes to DynamoDB, so there's
+    no need to convert the result to Decimal."""
     if not text or not text.strip():
         return None
 
@@ -229,12 +272,20 @@ def embed_text(text):
 
 
 def to_float_vector(vector):
+    """DynamoDB gives back embeddings as a list of Decimal; cosine_similarity
+    needs plain floats to do math with. Returns None for an empty/missing
+    vector so callers can treat "no embedding" and "embedding failed" the
+    same way."""
     if not vector:
         return None
     return [float(value) for value in vector]
 
 
 def cosine_similarity(vec_a, vec_b):
+    """Standard cosine similarity: how closely two vectors point in the same
+    direction, from -1 (opposite) to 1 (identical direction). Returns 0.0 for
+    any missing/zero-length input rather than raising, so a missing embedding
+    anywhere just falls back to "no semantic signal" instead of crashing."""
     if not vec_a or not vec_b:
         return 0.0
 
@@ -249,9 +300,15 @@ def cosine_similarity(vec_a, vec_b):
 
 
 def score_entries_with_semantics(entries, extracted_requirements, jd_vector, title_field, description_field, title_weight, description_weight):
-    """Score every entry on keyword AND semantic similarity, unfiltered, before
+    """The /tailor-generate counterpart to score_projects/score_experience:
+    computes BOTH a keyword score (same logic as the preview path) AND a
+    semantic score (cosine similarity between this entry's cached embedding
+    and the JD's embedding), and blends them into one total_score.
+
+    Score every entry on keyword AND semantic similarity, unfiltered, before
     any cutoff — filtering by keyword score first (as score_projects/score_experience
-    do) would throw away a paraphrase-only match before semantic scoring ever runs."""
+    do) would throw away a paraphrase-only match before semantic scoring ever runs.
+    """
     scored = []
 
     for entry in entries:
@@ -292,18 +349,24 @@ def score_entries_with_semantics(entries, extracted_requirements, jd_vector, tit
 
 
 def score_projects_with_semantics(profile, extracted_requirements, jd_vector):
+    """score_entries_with_semantics, specialized for the projects list."""
     return score_entries_with_semantics(
         profile.get("projects", []), extracted_requirements, jd_vector, "name", "description", 4, 3
     )
 
 
 def score_experience_with_semantics(profile, extracted_requirements, jd_vector):
+    """score_entries_with_semantics, specialized for the experience list."""
     return score_entries_with_semantics(
         profile.get("experience", []), extracted_requirements, jd_vector, "title", "description", 4, 2
     )
 
 
 def build_prompt_context(profile, job_description, extracted_requirements, matched_projects, matched_experiences):
+    """Assemble the compact payload sent to Bedrock for generation: who the
+    candidate is, what role they're targeting, and only the top few
+    highest-scored projects/experience entries (capped at 3 each) rather than
+    the candidate's whole profile."""
     return {
         "candidate": {
             "full_name": profile.get("full_name", ""),
@@ -320,6 +383,10 @@ def build_prompt_context(profile, job_description, extracted_requirements, match
 
 
 def call_bedrock_for_tailoring(prompt_context):
+    """The actual generation step: send prompt_context to Claude (via the
+    Converse API) and ask for a tailored CV section back as JSON. The system
+    prompt explicitly forbids inventing facts not present in the input —
+    a fabricated CV is actively harmful, not just a quality miss."""
     system_prompt = (
         "You are a CV tailoring assistant. Given a candidate's matched projects and "
         "experience and a target job, produce a tailored CV section. "
@@ -341,6 +408,10 @@ def call_bedrock_for_tailoring(prompt_context):
 
 
 def handle_tailor_preview(event):
+    """POST /tailor-preview: fast, free, keyword-only match between an
+    already-saved profile and an already-saved job description. Zero Bedrock
+    calls — meant to be cheap enough to call frequently (e.g. as the user
+    edits their profile)."""
     body = event.get("body")
     data = json.loads(body) if body else {}
 
@@ -382,6 +453,10 @@ def handle_tailor_preview(event):
 
 
 def handle_tailor_generate(event):
+    """POST /tailor-generate: the full pipeline. Accepts either a saved
+    {email, job_id} or an ad-hoc {email, company_name, job_title,
+    raw_description} that's never persisted. Does semantic+keyword matching,
+    then calls Bedrock to produce an actual tailored CV section."""
     data = json.loads(event.get("body") or "{}")
     email = data.get("email")
 
@@ -393,11 +468,14 @@ def handle_tailor_generate(event):
         return response(404, {"error": "Profile not found"})
 
     if data.get("job_id"):
+        # Saved-job path: reuse the JD's cached embedding if it has one,
+        # otherwise embed it now (covers JDs saved before embeddings existed).
         job_description = get_job_description_by_id(email, data["job_id"])
         if not job_description:
             return response(404, {"error": "Job description not found"})
         jd_vector = to_float_vector(job_description.get("embedding")) or embed_text(job_description["raw_description"])
     else:
+        # Ad-hoc path: nothing saved, nothing cached — embed it fresh.
         missing = [field for field in ("company_name", "job_title", "raw_description") if not data.get(field)]
         if missing:
             return response(400, {"error": f"{missing[0]} is required when job_id is omitted"})
@@ -430,6 +508,8 @@ def handle_tailor_generate(event):
 
 
 def handler(event, context):
+    """Lambda entrypoint: route by (rawPath, method) to one of the two
+    handlers above, same dispatch style as profile-service/job-service."""
     try:
         http_method = event.get("requestContext", {}).get("http", {}).get("method")
         raw_path = event.get("rawPath")
