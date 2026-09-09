@@ -204,20 +204,44 @@ item without specifying whose partition to read from.
   it. Same status: raised, not fixed, pending a decision on whether/how this
   app should support it.
 
-## Known bugs found during AWS verification
+## Known bugs, pending fix
 
-- 🐛 **`BEDROCK_MODEL_ID`'s value is wrong for Claude Haiku 4.5.** A direct
-  `bedrock-runtime converse` test call against `anthropic.claude-haiku-4-5-20251001-v1:0`
-  failed: `ValidationException: Invocation of model ID ... with on-demand
-  throughput isn't supported. Retry your request with the ID or ARN of an
-  inference profile`. The correct value is the inference profile ID
-  `us.anthropic.claude-haiku-4-5-20251001-v1:0` (confirmed via
-  `aws bedrock list-inference-profiles`). This also means the IAM policy
-  resource ARN in `infra-stack.ts` (currently
+Found via AWS testing or code review; not yet fixed. `tailoring-service`
+can't be deployed/verified until at least the model-ID one is fixed.
+
+- 🐛 **`BEDROCK_MODEL_ID`'s value is wrong for Claude Haiku 4.5.** (Found via
+  AWS testing.) A direct `bedrock-runtime converse` test call against
+  `anthropic.claude-haiku-4-5-20251001-v1:0` failed: `ValidationException:
+  Invocation of model ID ... with on-demand throughput isn't supported. Retry
+  your request with the ID or ARN of an inference profile`. The correct value
+  is the inference profile ID `us.anthropic.claude-haiku-4-5-20251001-v1:0`
+  (confirmed via `aws bedrock list-inference-profiles`). This also means the
+  IAM policy resource ARN in `infra-stack.ts` (currently
   `arn:aws:bedrock:{region}::foundation-model/{id}`) is the wrong ARN shape for
   an inference profile and needs updating too. Doesn't block `profile-service`
-  (which only uses Titan Embeddings, confirmed working) — needs fixing before
-  `tailoring-service`'s generation call can work.
+  (which only uses Titan Embeddings, confirmed working) — blocks
+  `tailoring-service`'s generation call.
+- 🐛 **Email not normalized in `tailoring-service`.** (Found via code review.)
+  `handle_tailor_preview`/`handle_tailor_generate` both use `data.get("email")`
+  raw, no `.strip().lower()` — unlike `profile-service`/`job-service`, which
+  both normalize on write. Since this is the one service that looks up the
+  *same* `email` in both tables, a casing/whitespace mismatch here would
+  spuriously 404 a profile or job lookup that actually exists.
+- 🐛 **No graceful degradation on three unguarded `embed_text` calls in
+  `handle_tailor_generate`.** (Found via code review.) The ad-hoc JD embed,
+  the saved-job fallback embed, and the per-entry safety-net embed inside
+  `score_entries_with_semantics` are all unwrapped — any Bedrock hiccup fails
+  the whole `/tailor-generate` request with a 500. Cheap fix: catch and treat
+  as `None`, since `cosine_similarity`/the rest of the pipeline already
+  tolerate a `None` vector by falling back to a `0.0` score — no other
+  behavior change needed.
+- 🐛 **No defensive parsing for markdown-fenced JSON from Bedrock.** (Found
+  via code review, not yet observed in practice — `tailoring-service` hasn't
+  been deployed.) The system prompt tells Claude to respond with "ONLY valid
+  JSON," but LLMs commonly wrap output in a ` ```json ... ``` ` fence anyway;
+  `json.loads(raw_text)` would reject that outright. Should strip a
+  leading/trailing code fence before parsing, defensively, rather than
+  trusting the instruction to always be followed.
 
 ## AWS verification status
 
