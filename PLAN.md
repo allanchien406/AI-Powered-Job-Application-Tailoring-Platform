@@ -106,10 +106,18 @@ item without specifying whose partition to read from.
 
 - `/tailor-preview` keeps the original keyword-only scoring (`score_projects`,
   `score_experience`) — free, fast, zero Bedrock calls, unchanged behavior.
-- `/tailor-generate` uses `score_*_with_semantics`: keyword score **and** cosine
-  similarity against the cached embedding are computed for *every* entry before
-  any filtering — filtering by keyword score first (like the old functions do)
-  would discard a paraphrase-only match before semantic scoring ever ran.
+  Still the only thing bound by the `KNOWN_SKILLS` whitelist.
+- `/tailor-generate` uses `score_*_with_semantics`, which is **pure embedding
+  similarity — no keyword component at all.** This was a deliberate
+  simplification after the fact: the original design blended keyword score
+  with cosine similarity, but a literal keyword match (e.g. "AWS" appearing in
+  both texts) already scores highly on embedding similarity too, so the
+  keyword bonus was mostly reinforcing what semantic scoring already caught,
+  not adding independent signal. Every entry is scored and returned
+  unfiltered (no hard cutoff — there's no validated cosine-similarity
+  threshold yet; `build_prompt_context`'s top-3 cap does the filtering
+  instead), ranked purely by cosine similarity between the entry's cached
+  embedding and the JD's embedding.
 - **`skills` is not an independent matching signal.** There's no
   `match_skills`/skill embedding at all, in either route. Reasoning: a skill
   worth matching on should already appear with context inside a project or
@@ -127,6 +135,17 @@ item without specifying whose partition to read from.
 - Calls Bedrock **Claude Haiku 4.5** via the Converse API with matched
   projects/experience, explicitly instructed not to invent employers,
   dates, or achievements not present in the input.
+- **The prompt includes the actual raw JD text** (`raw_job_description` in
+  `prompt_context`), not a `KNOWN_SKILLS`-filtered keyword list. The original
+  design only ever gave the model `extracted_requirements` — a handful of
+  whitelist terms — never the real posting; the model was tailoring a CV
+  against a thin proxy, with no way to pick up on anything the JD asked for
+  outside that whitelist, or its actual tone/emphasis. Considered having a
+  separate LLM call summarize the JD first instead — rejected as an
+  unnecessary second Bedrock call solving a problem Claude Haiku doesn't have
+  (it can read a raw job posting directly in the same call); worth
+  reconsidering only if real JDs turn out to be long enough to strain the
+  prompt budget, which there's no evidence of yet.
 - Returns `{title, summary, experience[]}` shaped to map onto the frontend's
   `CVData` — not yet wired into the dashboard (see Deferred).
 
@@ -169,21 +188,56 @@ item without specifying whose partition to read from.
   during real-AWS testing, the fix goes on `develop` (the real source of
   truth), then gets pulled into the test branch with `git merge develop`
   before redeploying.
+- ✅ **`tailoring-service`'s four review bugs, fixed together:**
+  - **Email normalized** (`.strip().lower()`) in both `handle_tailor_preview`
+    and `handle_tailor_generate`, matching `profile-service`/`job-service`.
+  - **Graceful degradation via a new `safe_embed_text` wrapper** — the three
+    previously-unguarded `embed_text` calls (the ad-hoc JD embed, the
+    saved-job fallback embed, and the per-entry safety-net embed inside
+    `score_entries_with_semantics`) all route through it now. A Bedrock
+    failure degrades to `None` instead of a 500; the rest of the pipeline
+    (`cosine_similarity`) already tolerates a `None` vector by falling back to
+    a `0.0` score.
+  - **`strip_code_fence` added before `json.loads`** in
+    `call_bedrock_for_tailoring`, defensively stripping a
+    ` ```json ... ``` ` wrapper if Claude adds one despite being told not to.
+  - **`BEDROCK_MODEL_ID` fixed to the inference-profile ID**
+    `us.anthropic.claude-haiku-4-5-20251001-v1:0` (confirmed working via a
+    real `converse` call), and the IAM policy rebuilt to grant both the
+    profile ARN and the three regional foundation-model ARNs it can route to
+    (`us-east-1`, `us-east-2`, `us-west-2` — confirmed via
+    `aws bedrock get-inference-profile`). While rebuilding this policy, also
+    split the previously-shared Bedrock grant into an embedding-only policy
+    (all three Lambdas) and a generation-only policy (`tailoring-service`
+    only) — `profile-service`/`job-service` never call Claude Haiku and
+    shouldn't have had permission to.
+  - **Verified via an execution-based local test** (monkeypatching the
+    AWS-dependent leaf calls so the real handler code — routing,
+    normalization, validation — actually runs): email normalization, the
+    degradation path, and fence-stripping all confirmed correct when actually
+    executed, not just read. `cdk synth` confirmed the resulting IAM policies
+    are scoped correctly per-service. Not yet deployed/AWS-verified — that's
+    the next step, same staged process as the other two services.
 
-## Known bugs found during AWS verification
+## Open decisions
 
-- 🐛 **`BEDROCK_MODEL_ID`'s value is wrong for Claude Haiku 4.5.** A direct
-  `bedrock-runtime converse` test call against `anthropic.claude-haiku-4-5-20251001-v1:0`
-  failed: `ValidationException: Invocation of model ID ... with on-demand
-  throughput isn't supported. Retry your request with the ID or ARN of an
-  inference profile`. The correct value is the inference profile ID
-  `us.anthropic.claude-haiku-4-5-20251001-v1:0` (confirmed via
-  `aws bedrock list-inference-profiles`). This also means the IAM policy
-  resource ARN in `infra-stack.ts` (currently
-  `arn:aws:bedrock:{region}::foundation-model/{id}`) is the wrong ARN shape for
-  an inference profile and needs updating too. Doesn't block `profile-service`
-  (which only uses Titan Embeddings, confirmed working) — needs fixing before
-  `tailoring-service`'s generation call can work.
+- ❓ **No dedup on `job-service` save.** Every `PUT /job-description` creates a
+  brand-new item with a fresh UUID `job_id`, even if it's an identical
+  resubmission — a double-click, a client retry after a timeout, or the same
+  JD pasted again while iterating on a profile. Once `/job-description/list`
+  is actually used by a frontend, this could mean duplicate entries piling up
+  in someone's saved-jobs list. Raised during `job-service`'s review; left as
+  a product/scope call, not fixed.
+- ❓ **No delete/archive for job descriptions.** `cv-service` had soft-delete
+  (`is_archived`) before it was dropped; `job-service` has no equivalent —
+  once saved, a job description sits there permanently with no way to remove
+  it. Same status: raised, not fixed, pending a decision on whether/how this
+  app should support it.
+
+## Known bugs, pending fix
+
+None currently outstanding. (See Resolved decisions below for the four
+`tailoring-service` bugs fixed together.)
 
 ## AWS verification status
 
@@ -194,9 +248,16 @@ item without specifying whose partition to read from.
   reuses an unchanged entry's embedding byte-for-byte while correctly
   re-embedding an edited one, and all error paths (404/400) behave as
   expected. CloudWatch logs clean across every test call.
-- 🚧 **`job-service`** — code-reviewed and fixed, not yet deployed/AWS-verified.
-  Next step: staged deploy (own throwaway branch off `develop`, same process as
-  `profile-service`) and a manual test pass before marking ✅.
+- ✅ **`job-service`** — added to the same staged stack (`test/deploy-profile-service`,
+  now covering both services) and manually verified: `PUT`/`GET`/`GET .../list`
+  all round-trip correctly, email is normalized (`"  Allan@Example.com  "` →
+  `"allan@example.com"`, confirmed in the stored item), a real embedding is
+  stored (1024-dim, confirmed via raw DynamoDB read), blank-after-trim fields
+  are rejected (400) instead of silently stored, a nonexistent `job_id` 404s,
+  and a different email against the same `job_id` also 404s — confirming the
+  partition-key scoping is structural, not just an unchecked assumption.
+  CloudWatch logs clean across every test call. Confirmed independently via
+  the manual test plan, per the testing workflow.
 - Not yet reviewed, deployed, or verified: `tailoring-service`.
 
 ## Deferred / explicitly out of scope
