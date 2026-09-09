@@ -170,6 +170,21 @@ item without specifying whose partition to read from.
   truth), then gets pulled into the test branch with `git merge develop`
   before redeploying.
 
+## Open decisions
+
+- ❓ **No dedup on `job-service` save.** Every `PUT /job-description` creates a
+  brand-new item with a fresh UUID `job_id`, even if it's an identical
+  resubmission — a double-click, a client retry after a timeout, or the same
+  JD pasted again while iterating on a profile. Once `/job-description/list`
+  is actually used by a frontend, this could mean duplicate entries piling up
+  in someone's saved-jobs list. Raised during `job-service`'s review; left as
+  a product/scope call, not fixed.
+- ❓ **No delete/archive for job descriptions.** `cv-service` had soft-delete
+  (`is_archived`) before it was dropped; `job-service` has no equivalent —
+  once saved, a job description sits there permanently with no way to remove
+  it. Same status: raised, not fixed, pending a decision on whether/how this
+  app should support it.
+
 ## Known bugs found during AWS verification
 
 - 🐛 **`BEDROCK_MODEL_ID`'s value is wrong for Claude Haiku 4.5.** A direct
