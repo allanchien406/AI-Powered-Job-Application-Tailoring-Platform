@@ -27,9 +27,17 @@
 
 ## Testing & verification workflow
 
-When a change needs functional verification — deploying and hitting a real
-endpoint, running a demo UI, exercising an actual data flow — not just a
-type-check or a code read-through:
+**Any code change gets actually run before it's pushed — not just
+type-checked/compiled or read through.** A syntax check confirms the code
+parses; it says nothing about whether the logic does what it's supposed to.
+For a change too small to warrant a full deploy, that still means executing
+the changed logic somehow (a local invocation, a quick script exercising the
+changed function against representative input) before pushing — reading the
+diff and confirming it compiles is not "tested."
+
+When a change needs fuller functional verification — deploying and hitting a
+real endpoint, running a demo UI, exercising an actual data flow — not just a
+local execution check:
 
 1. Run and verify it yourself first (deploy it, curl it, drive it with a
    headless browser, check the logs — whatever actually proves it works),
