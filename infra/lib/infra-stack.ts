@@ -8,7 +8,17 @@ import * as iam from "aws-cdk-lib/aws-iam";
 
 // Verify these against the Bedrock console's model catalog for your account/region
 // before deploying — Bedrock model IDs are not guaranteed stable across regions.
-const BEDROCK_MODEL_ID = "anthropic.claude-haiku-4-5-20251001-v1:0";
+//
+// Claude Haiku 4.5 can't be invoked by its bare foundation-model ID — Bedrock
+// requires a cross-region inference profile ARN instead (confirmed via a real
+// `converse` call; the bare ID fails with "on-demand throughput isn't
+// supported"). `aws bedrock get-inference-profile` shows this profile routes
+// to the model in us-east-1, us-east-2, and us-west-2 — IAM needs to grant
+// both the profile ARN itself AND each of those regional foundation-model
+// ARNs, since the profile can dispatch to any of them.
+const BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
+const BEDROCK_MODEL_UNDERLYING_ID = "anthropic.claude-haiku-4-5-20251001-v1:0";
+const BEDROCK_MODEL_REGIONS = ["us-east-1", "us-east-2", "us-west-2"];
 const BEDROCK_EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0";
 
 export class InfraStack extends cdk.Stack {
@@ -34,21 +44,30 @@ export class InfraStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // --- Shared Bedrock access ---
-    // Scoped to the two specific models this app uses, not bedrock:* / resource "*".
+    // --- Bedrock access, split by what each service actually needs ---
+    // Embeddings are used by all three Lambdas; generation (Claude Haiku 4.5)
+    // is only ever called by tailoring-service, so it gets its own policy
+    // rather than being bundled into one grant handed to every Lambda.
 
-    const bedrockInvokePolicy = new iam.PolicyStatement({
+    const bedrockEmbeddingPolicy = new iam.PolicyStatement({
       actions: ["bedrock:InvokeModel"],
       resources: [
-        `arn:aws:bedrock:${this.region}::foundation-model/${BEDROCK_MODEL_ID}`,
         `arn:aws:bedrock:${this.region}::foundation-model/${BEDROCK_EMBEDDING_MODEL_ID}`,
       ],
     });
 
-    const bedrockEnv = {
-      BEDROCK_MODEL_ID,
-      BEDROCK_EMBEDDING_MODEL_ID,
-    };
+    const bedrockGenerationPolicy = new iam.PolicyStatement({
+      actions: ["bedrock:InvokeModel"],
+      resources: [
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${BEDROCK_MODEL_ID}`,
+        ...BEDROCK_MODEL_REGIONS.map(
+          (region) => `arn:aws:bedrock:${region}::foundation-model/${BEDROCK_MODEL_UNDERLYING_ID}`,
+        ),
+      ],
+    });
+
+    const embeddingEnv = { BEDROCK_EMBEDDING_MODEL_ID };
+    const generationEnv = { BEDROCK_MODEL_ID, BEDROCK_EMBEDDING_MODEL_ID };
 
     // --- Profile service Lambda ---
     const profileServiceHandler = new Function(this, "ProfileServiceHandler", {
@@ -58,11 +77,11 @@ export class InfraStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(15), // occasional single embedding call on save
       environment: {
         PROFILES_TABLE_NAME: profilesTable.tableName,
-        ...bedrockEnv,
+        ...embeddingEnv,
       },
     });
     profilesTable.grantReadWriteData(profileServiceHandler);
-    profileServiceHandler.addToRolePolicy(bedrockInvokePolicy);
+    profileServiceHandler.addToRolePolicy(bedrockEmbeddingPolicy);
 
     // --- Job description service Lambda ---
     const jobDescriptionServiceHandler = new Function(
@@ -75,12 +94,12 @@ export class InfraStack extends cdk.Stack {
         timeout: cdk.Duration.seconds(15),
         environment: {
           JOB_DESCRIPTIONS_TABLE_NAME: jobDescriptionsTable.tableName,
-          ...bedrockEnv,
+          ...embeddingEnv,
         },
       },
     );
     jobDescriptionsTable.grantReadWriteData(jobDescriptionServiceHandler);
-    jobDescriptionServiceHandler.addToRolePolicy(bedrockInvokePolicy);
+    jobDescriptionServiceHandler.addToRolePolicy(bedrockEmbeddingPolicy);
 
     // --- Tailoring service Lambda ---
     // Read-only on both tables — it never writes a profile or a job description,
@@ -96,13 +115,14 @@ export class InfraStack extends cdk.Stack {
         environment: {
           PROFILES_TABLE_NAME: profilesTable.tableName,
           JOB_DESCRIPTIONS_TABLE_NAME: jobDescriptionsTable.tableName,
-          ...bedrockEnv,
+          ...generationEnv,
         },
       },
     );
     profilesTable.grantReadData(tailoringServiceHandler);
     jobDescriptionsTable.grantReadData(tailoringServiceHandler);
-    tailoringServiceHandler.addToRolePolicy(bedrockInvokePolicy);
+    tailoringServiceHandler.addToRolePolicy(bedrockEmbeddingPolicy);
+    tailoringServiceHandler.addToRolePolicy(bedrockGenerationPolicy);
 
     // --- HTTP API Gateway ---
     const api = new HttpApi(this, "ProfileServiceApi", {

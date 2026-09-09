@@ -89,7 +89,9 @@ List every job description saved by a user.
 
 ---
 
-## `tailoring-service` — 👀 not yet reviewed
+## `tailoring-service` — ✅ reviewed (fixed: email normalization, graceful
+degradation on embedding failure, defensive markdown-fence parsing, correct
+Claude Haiku 4.5 model ID + IAM ARNs) — not yet AWS-verified
 
 Source: `infra/lambda/tailoring-service/index.py`. Reads `ProfilesTable` and
 `JobDescriptionsTable` directly (read-only — never writes either).
@@ -117,9 +119,6 @@ Full pipeline: pure-embedding matching (no keyword component — see
   `{name/title, description, score}`, ranked by cosine similarity, top 3 only)
 - **400:** missing required field · **404:** profile or job not found (saved-job
   path only) · **502:** Bedrock call failed or returned unparseable JSON
-- **⚠️ Known bug (see `PLAN.md`):** the generation call's model ID is currently
-  wrong for Claude Haiku 4.5 (needs an inference-profile ARN, not the bare
-  model ID) — this route will fail at the Bedrock call until that's fixed.
 - **Behavior worth knowing:** unlike `/tailor-preview`, matching here has no
   keyword component at all — every project/experience entry is ranked purely
   by cosine similarity against the JD's embedding, with no hard score cutoff

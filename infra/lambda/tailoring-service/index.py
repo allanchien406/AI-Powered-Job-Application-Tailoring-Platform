@@ -265,6 +265,19 @@ def embed_text(text):
     return payload.get("embedding")
 
 
+def safe_embed_text(text):
+    """embed_text, but a Bedrock failure degrades to "no embedding" instead
+    of failing the whole /tailor-generate request. Safe to do because
+    cosine_similarity already treats a None vector as "no semantic signal"
+    (returns 0.0) rather than raising — so a failed embed here just means
+    that one piece falls back to no semantic contribution, not a crash."""
+    try:
+        return embed_text(text)
+    except Exception as exc:
+        print(f"embed_text failed: {exc}")
+        return None
+
+
 def to_float_vector(vector):
     """DynamoDB gives back embeddings as a list of Decimal; cosine_similarity
     needs plain floats to do math with. Returns None for an empty/missing
@@ -317,7 +330,7 @@ def score_entries_with_semantics(entries, jd_vector, title_field, description_fi
         entry_vector = to_float_vector(entry.get("embedding"))
         if entry_vector is None:
             # Safety net for entries saved before embeddings existed.
-            entry_vector = embed_text(f"{title_text} {description_text}")
+            entry_vector = safe_embed_text(f"{title_text} {description_text}")
         semantic_score = cosine_similarity(jd_vector, entry_vector) if entry_vector else 0.0
 
         scored.append(
@@ -366,6 +379,18 @@ def build_prompt_context(profile, job_description, matched_projects, matched_exp
     }
 
 
+def strip_code_fence(text):
+    """LLMs commonly wrap JSON output in a ```json ... ``` markdown fence even
+    when explicitly told to respond with ONLY JSON. Strip one if present
+    before parsing, rather than trusting the instruction to always be
+    followed and rejecting an otherwise-good generation."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    return text.strip()
+
+
 def call_bedrock_for_tailoring(prompt_context):
     """The actual generation step: send prompt_context to Claude (via the
     Converse API) and ask for a tailored CV section back as JSON. The system
@@ -388,7 +413,7 @@ def call_bedrock_for_tailoring(prompt_context):
         inferenceConfig={"maxTokens": 1024, "temperature": 0.4},
     )
     raw_text = resp["output"]["message"]["content"][0]["text"]
-    return json.loads(raw_text)
+    return json.loads(strip_code_fence(raw_text))
 
 
 def handle_tailor_preview(event):
@@ -399,7 +424,7 @@ def handle_tailor_preview(event):
     body = event.get("body")
     data = json.loads(body) if body else {}
 
-    email = data.get("email")
+    email = (data.get("email") or "").strip().lower()
     job_id = data.get("job_id")
 
     if not email:
@@ -442,7 +467,7 @@ def handle_tailor_generate(event):
     then calls Bedrock, which reads the actual JD text directly, to produce
     an actual tailored CV section."""
     data = json.loads(event.get("body") or "{}")
-    email = data.get("email")
+    email = (data.get("email") or "").strip().lower()
 
     if not email:
         return response(400, {"error": "email is required"})
@@ -457,14 +482,14 @@ def handle_tailor_generate(event):
         job_description = get_job_description_by_id(email, data["job_id"])
         if not job_description:
             return response(404, {"error": "Job description not found"})
-        jd_vector = to_float_vector(job_description.get("embedding")) or embed_text(job_description["raw_description"])
+        jd_vector = to_float_vector(job_description.get("embedding")) or safe_embed_text(job_description["raw_description"])
     else:
         # Ad-hoc path: nothing saved, nothing cached — embed it fresh.
         missing = [field for field in ("company_name", "job_title", "raw_description") if not data.get(field)]
         if missing:
             return response(400, {"error": f"{missing[0]} is required when job_id is omitted"})
         job_description = {key: data[key] for key in ("company_name", "job_title", "raw_description")}
-        jd_vector = embed_text(job_description["raw_description"])
+        jd_vector = safe_embed_text(job_description["raw_description"])
 
     matched_projects = score_projects_with_semantics(profile, jd_vector)
     matched_experiences = score_experience_with_semantics(profile, jd_vector)
