@@ -53,7 +53,7 @@ API Gateway (HttpApi)
     { "name": "2048 CI/CD Project", "description": "...", "embedding": [0.02, "..."] }
   ],
   "experience": [
-    { "title": "Research Engineer", "description": "...", "embedding": [0.09, "..."] }
+    { "title": "Research Engineer", "company": "Bittide Labs", "description": "...", "embedding": [0.09, "..."] }
   ],
   "created_at": "2026-01-04T10:22:31Z",
   "updated_at": "2026-09-05T03:10:02Z"
@@ -217,17 +217,46 @@ item without specifying whose partition to read from.
     degradation path, and fence-stripping all confirmed correct when actually
     executed, not just read. `cdk synth` confirmed the resulting IAM policies
     are scoped correctly per-service.
-- ✅ **Fixed generation fabricating an employer name.** The system prompt in
-  `call_bedrock_for_tailoring` now explicitly says the candidate's data has no
-  company/period fields at all, to write `"Not specified"` for both rather
-  than guessing, and to never write `target_role.company_name` as an
-  experience entry's `"company"` — that's the job being applied to, not
+- ✅ **Fixed generation fabricating an employer name (prompt-level fix, before
+  the schema fix below existed).** The system prompt in
+  `call_bedrock_for_tailoring` was updated to say `"Not specified"` should be
+  used rather than guessing, and to never write `target_role.company_name` as
+  an experience entry's `"company"` — that's the job being applied to, not
   somewhere the candidate worked. Verified against real Bedrock, not just
   read: redeployed and re-ran the exact case that had hallucinated
   (`"Catalyst Cloud"` and `"Acme Corp"` both previously appeared as fabricated
   employers) five times across both the saved-job and ad-hoc paths — zero
-  hallucinations, `"Not specified"` written consistently every time. Manual
-  confirmation from the user still pending, per the testing workflow.
+  hallucinations, `"Not specified"` written consistently every time.
+- ✅ **Added `company` to the experience schema**, closing the gap the fix
+  above was working around. `profile-service`'s `experience` entries now
+  accept an optional `company` field (`normalize_entry_list(..., ["title",
+  "company", "description"])`); `tailoring-service` surfaces it through both
+  matching paths (`score_experience`'s keyword output, and
+  `score_experience_with_semantics` via a new `extra_fields` passthrough) so
+  the generation prompt has a real employer name to use when one exists,
+  rather than needing to fall back to "Not specified" for data that's
+  actually available. The system prompt was updated accordingly: use the real
+  `"company"` if given and non-empty, fall back to `"Not specified"`
+  otherwise (still never `target_role.company_name`). This also closes a
+  frontend-alignment gap noted separately: `dashboard/src/types.ts`'s
+  `ExperienceEntry` already had a `company` field — it was `profile-service`'s
+  schema that was missing it, not the frontend.
+
+  One backward-compatibility wrinkle caught and fixed while making this
+  change: `attach_embeddings`' entry-comparison (`entry_text_unchanged`) did
+  `existing_entry.get(key) == new_entry.get(key)`, which would have treated
+  every pre-existing experience entry (saved before `company` existed, so the
+  key is absent from the stored item) as "changed" the next time it's saved,
+  since a missing key (`None`) doesn't equal the new payload's `company: ""`
+  — needlessly re-embedding data that hadn't actually changed. Fixed by
+  normalizing both sides with `(x or "")` before comparing, so a missing key
+  and an empty string are treated the same; this also protects any future
+  field addition the same way.
+
+  Verified via execution-based local tests (not yet against real AWS): both
+  `profile-service`'s and `tailoring-service`'s handling of the new field,
+  and specifically the backward-compatibility fix, confirmed via direct
+  function calls with representative inputs.
 
 ## Open decisions
 
@@ -262,6 +291,11 @@ fabricated-employer-name fix.)
   something similar recurs.
 
 ## AWS verification status
+
+⚠️ The `company` field addition (schema + `entry_text_unchanged` backward-compat
+fix in `profile-service`; the matching/prompt updates in `tailoring-service`)
+is verified only via local execution-based tests so far — not yet redeployed
+or re-checked against live AWS. The ✅ statuses below predate that change.
 
 - ✅ **`profile-service`** — deployed to real AWS (account `681583877402`,
   `us-east-1`) via the staged process above and manually verified: `PUT`/`GET
