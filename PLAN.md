@@ -113,11 +113,13 @@ item without specifying whose partition to read from.
   with cosine similarity, but a literal keyword match (e.g. "AWS" appearing in
   both texts) already scores highly on embedding similarity too, so the
   keyword bonus was mostly reinforcing what semantic scoring already caught,
-  not adding independent signal. Every entry is scored and returned
-  unfiltered (no hard cutoff — there's no validated cosine-similarity
-  threshold yet; `build_prompt_context`'s top-3 cap does the filtering
-  instead), ranked purely by cosine similarity between the entry's cached
-  embedding and the JD's embedding.
+  not adding independent signal. Every entry is ranked by cosine similarity
+  between its cached embedding and the JD's embedding; entries below
+  `MIN_SEMANTIC_SCORE` (`0.10`) are then dropped as noise, and
+  `build_prompt_context` caps the prompt at the top 3 of what's left. The
+  0.10 number comes from a real test (see "Threshold calibration" below), not
+  a guess — it started life as "no threshold at all" until there was data to
+  set one from.
 - **`skills` is not an independent matching signal.** There's no
   `match_skills`/skill embedding at all, in either route. Reasoning: a skill
   worth matching on should already appear with context inside a project or
@@ -127,6 +129,28 @@ item without specifying whose partition to read from.
   full job-description text. `skills` stays in profile storage as plain
   strings, unembedded, for CV-display purposes only (the conventional
   "Skills" tag section), not for scoring.
+
+### Threshold calibration
+
+`MIN_SEMANTIC_SCORE = 0.10`. Data behind it (see `TESTING.md` for the full
+runs):
+
+- **Test 1** — a profile with 4 experience + 4 project entries, only one of
+  each genuinely IT-related, the rest hobbies (choir, astronomy, gardening,
+  sourdough…), against a software-engineer JD. Cosine scores: hobbies landed
+  **0.03–0.09**; the one relevant experience (had a literal "python" hit too)
+  scored **0.38**; the one relevant project (pure paraphrase, *zero* keyword
+  overlap — "backend server / relational database" vs the JD's "databases /
+  full-stack web applications") scored **0.14**. `0.10` sits just above the
+  hobby ceiling with margin below that weakest real match.
+
+Known limits of this number: it's calibrated from synthetic profiles, and the
+gap between "weak real paraphrase" (~0.14) and "hobby noise" (~0.09) is thin —
+a slightly weaker paraphrase or a hobby written in professional-sounding
+language could land in that band and be misclassified either way. Erring
+toward recall (keep weak matches) because catching paraphrases keyword
+matching misses is the entire reason semantic scoring exists. Revisit as real
+usage data accumulates.
 
 ## Generation — ✅ implemented
 
@@ -292,10 +316,16 @@ fabricated-employer-name fix.)
 
 ## AWS verification status
 
-⚠️ The `company` field addition (schema + `entry_text_unchanged` backward-compat
-fix in `profile-service`; the matching/prompt updates in `tailoring-service`)
-is verified only via local execution-based tests so far — not yet redeployed
-or re-checked against live AWS. The ✅ statuses below predate that change.
+✅ **The `company` field addition is now AWS-verified too**, redeployed and
+retested on top of the statuses below: resaving the existing test profile
+*without* `company` (simulating an old client) left the stored embedding
+byte-for-byte unchanged (the backward-compat fix works), resaving *with* a
+real company name correctly triggered a fresh embed, and the real value
+(`"Bittide Labs"`) flowed all the way through to a live `/tailor-generate`
+call — showing up correctly on the matching experience entry while the
+project-based entry (which genuinely has no employer) still correctly said
+`"Not specified"`, and the target company was never used as a fake employer.
+CloudWatch logs clean on both `profile-service` and `tailoring-service`.
 
 - ✅ **`profile-service`** — deployed to real AWS (account `681583877402`,
   `us-east-1`) via the staged process above and manually verified: `PUT`/`GET
