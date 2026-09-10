@@ -372,8 +372,16 @@ All three backend services are deployed and verified. The dashboard
 (`dashboard/`) still talks to the removed `cv-service` (`cvApi.ts` → `/cv`,
 `/cv/list`) and has no wiring to `profile-service`/`job-service`/`tailoring-service`.
 
-**Free-text experience → the profile-service JSON schema — ✅ backend built,
-not yet AWS-verified.** The product direction (and the `FreeformDemoPage`
+**Free-text experience → the profile-service JSON schema — ✅ backend built and
+tested against real AWS.** Two runs (a rambling casual paragraph, and a sparse
+self-taught description): companies extracted correctly when named, left empty
+when not (no guessed employers), a stated hobby correctly excluded, and a
+description with no formal role correctly produced an empty `experience` list
+rather than fabricating one. One minor note: the model will lightly *infer* a
+job title from described work ("Frontend Developer" from "doing frontend React
+work") — a synthesis, not a fabrication of facts, and the frontend review step
+is there to catch it. See `TESTING.md`. The product direction (and the
+`FreeformDemoPage`
 prototype) is that a user pastes/types their background as prose, not fills in
 a structured form — but `PUT /profile` needs `{skills[], projects[{name,
 description}], experience[{title, company?, description}]}`. A new

@@ -40,7 +40,7 @@ Create or fully replace a profile (upsert by `email`).
 
 ---
 
-## `intake-service` — ✅ reviewed · not yet AWS-verified
+## `intake-service` — ✅ reviewed · AWS-tested (see `TESTING.md`)
 
 Source: `infra/lambda/intake-service/index.py`. No storage — one Bedrock call,
 never touches DynamoDB. Exists to turn free-form profile prose into the
