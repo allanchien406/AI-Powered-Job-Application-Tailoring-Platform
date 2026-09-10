@@ -28,7 +28,7 @@ Fetch a profile by email.
 
 Create or fully replace a profile (upsert by `email`).
 
-- **Body:** `{email, full_name?, skills?: string[], projects?: [{name, description}], experience?: [{title, description}]}`
+- **Body:** `{email, full_name?, skills?: string[], projects?: [{name, description}], experience?: [{title, company?, description}]}`
 - **200:** `{message, ...same shape as GET}`, plus `embedding_warnings: string[]`
   **only if** embedding a new/changed entry failed (save still succeeds either
   way — see `PLAN.md`'s graceful-degradation note)
@@ -89,9 +89,10 @@ List every job description saved by a user.
 
 ---
 
-## `tailoring-service` — ✅ reviewed (fixed: email normalization, graceful
-degradation on embedding failure, defensive markdown-fence parsing, correct
-Claude Haiku 4.5 model ID + IAM ARNs) — not yet AWS-verified
+## `tailoring-service` — ✅ reviewed and deployed (fixed: email normalization,
+graceful degradation on embedding failure, defensive markdown-fence parsing,
+correct Claude Haiku 4.5 model ID + IAM ARNs, generation fabricating an
+employer name) — AWS-verified pending final manual confirmation (see `PLAN.md`)
 
 Source: `infra/lambda/tailoring-service/index.py`. Reads `ProfilesTable` and
 `JobDescriptionsTable` directly (read-only — never writes either).
@@ -115,8 +116,10 @@ Full pipeline: pure-embedding matching (no keyword component — see
   persisted, embedded fresh on the spot)
 - **200:** `{message, email, prompt_context, generated_cv: {title, summary, experience: [{company, role, period, description}]}}`
   — `prompt_context` includes `raw_job_description` (the actual JD text, not a
-  keyword-extracted proxy), `matched_projects`/`matched_experiences` (each
-  `{name/title, description, score}`, ranked by cosine similarity, top 3 only)
+  keyword-extracted proxy), `matched_projects` (`{name, description, score}`)
+  and `matched_experiences` (`{title, company, description, score}` — `company`
+  is the profile's real value if one was saved, `""` otherwise), ranked by
+  cosine similarity, top 3 only
 - **400:** missing required field · **404:** profile or job not found (saved-job
   path only) · **502:** Bedrock call failed or returned unparseable JSON
 - **Behavior worth knowing:** unlike `/tailor-preview`, matching here has no

@@ -216,6 +216,7 @@ def score_experience(profile, extracted_requirements):
             continue
 
         experience_title = experience.get("title", "")
+        experience_company = experience.get("company", "")
         experience_description = experience.get("description", "")
 
         title_score, title_matches = score_text_against_requirements(experience_title, extracted_requirements, 4)
@@ -230,6 +231,7 @@ def score_experience(profile, extracted_requirements):
             scored_experiences.append(
                 {
                     "title": experience_title,
+                    "company": experience_company,
                     "description": experience_description,
                     "score": total_score,
                     "matched_terms": matched_terms,
@@ -306,7 +308,7 @@ def cosine_similarity(vec_a, vec_b):
     return dot / (norm_a * norm_b)
 
 
-def score_entries_with_semantics(entries, jd_vector, title_field, description_field):
+def score_entries_with_semantics(entries, jd_vector, title_field, description_field, extra_fields=()):
     """The /tailor-generate counterpart to score_projects/score_experience:
     ranks every entry by pure cosine similarity between its cached embedding
     and the JD's embedding — no keyword component at all (unlike
@@ -317,6 +319,11 @@ def score_entries_with_semantics(entries, jd_vector, title_field, description_fi
     like on real profile/JD pairs, so ranking plus build_prompt_context's
     top-3 cap is safer than an arbitrary absolute score threshold picked
     without data. Revisit once this has run against real embeddings.
+
+    extra_fields carries through additional entry fields as-is (not scored,
+    not embedded) — used for "company" on experience entries, so the
+    generation prompt actually has a real employer name when one exists
+    instead of always needing to fall back to "Not specified".
     """
     scored = []
 
@@ -333,13 +340,14 @@ def score_entries_with_semantics(entries, jd_vector, title_field, description_fi
             entry_vector = safe_embed_text(f"{title_text} {description_text}")
         semantic_score = cosine_similarity(jd_vector, entry_vector) if entry_vector else 0.0
 
-        scored.append(
-            {
-                title_field: title_text,
-                description_field: description_text,
-                "score": round(semantic_score, 3),
-            }
-        )
+        scored_entry = {
+            title_field: title_text,
+            description_field: description_text,
+            "score": round(semantic_score, 3),
+        }
+        for field in extra_fields:
+            scored_entry[field] = entry.get(field, "")
+        scored.append(scored_entry)
 
     scored.sort(key=lambda item: item["score"], reverse=True)
     return scored
@@ -352,7 +360,9 @@ def score_projects_with_semantics(profile, jd_vector):
 
 def score_experience_with_semantics(profile, jd_vector):
     """score_entries_with_semantics, specialized for the experience list."""
-    return score_entries_with_semantics(profile.get("experience", []), jd_vector, "title", "description")
+    return score_entries_with_semantics(
+        profile.get("experience", []), jd_vector, "title", "description", extra_fields=("company",)
+    )
 
 
 def build_prompt_context(profile, job_description, matched_projects, matched_experiences):
@@ -404,10 +414,12 @@ def call_bedrock_for_tailoring(prompt_context):
         '[{"company": string, "role": string, "period": string, "description": string}]}. '
         "Only use facts present in the candidate's matched projects and experience "
         "below — do not invent employers, dates, or achievements that are not present in the input. "
-        "The candidate's matched projects and experience do not include company names or dates: "
-        'for "company" and "period", write exactly "Not specified" rather than guessing. '
-        'Never write target_role.company_name as an experience entry\'s "company" — that is the '
-        "job the candidate is applying TO, not somewhere they have worked."
+        'For each experience entry, use its own "company" field if one is given and non-empty. '
+        'If it is missing or blank, write exactly "Not specified" rather than guessing — this '
+        "includes matched projects, which never have a company at all. The candidate's data "
+        'never includes dates, so always write "Not specified" for "period". Never write '
+        'target_role.company_name as an experience entry\'s "company" — that is the job the '
+        "candidate is applying TO, not somewhere they have worked, even when no real company is given."
     )
 
     resp = bedrock_runtime.converse(

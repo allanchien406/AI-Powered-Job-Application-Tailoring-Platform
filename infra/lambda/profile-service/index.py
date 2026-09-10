@@ -81,7 +81,7 @@ def normalize_profile_payload(data):
         "email": email.strip().lower() if isinstance(email, str) else "",
         "skills": normalize_string_list(data.get("skills")),
         "projects": normalize_entry_list(data.get("projects"), ["name", "description"]),
-        "experience": normalize_entry_list(data.get("experience"), ["title", "description"]),
+        "experience": normalize_entry_list(data.get("experience"), ["title", "company", "description"]),
     }
 
 
@@ -107,7 +107,11 @@ def embed_text(text):
 def entry_text_unchanged(existing_entry, new_entry, text_keys):
     if not existing_entry:
         return False
-    return all(existing_entry.get(key) == new_entry.get(key) for key in text_keys)
+    # (x or "") treats a missing key the same as an empty string, so adding a
+    # new field to text_keys later (like "company") doesn't make every
+    # pre-existing entry look "changed" just because the old stored item
+    # predates that field.
+    return all((existing_entry.get(key) or "") == (new_entry.get(key) or "") for key in text_keys)
 
 
 def attach_embeddings(new_entries, existing_entries, text_keys):
@@ -182,7 +186,7 @@ def save_profile(table, normalized_profile):
         normalized_profile["projects"], existing.get("projects", []), ["name", "description"]
     )
     experience, experience_warnings = attach_embeddings(
-        normalized_profile["experience"], existing.get("experience", []), ["title", "description"]
+        normalized_profile["experience"], existing.get("experience", []), ["title", "company", "description"]
     )
 
     item = {
