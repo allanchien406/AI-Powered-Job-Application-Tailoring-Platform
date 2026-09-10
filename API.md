@@ -40,6 +40,32 @@ Create or fully replace a profile (upsert by `email`).
 
 ---
 
+## `intake-service` — ✅ reviewed · not yet AWS-verified
+
+Source: `infra/lambda/intake-service/index.py`. No storage — one Bedrock call,
+never touches DynamoDB. Exists to turn free-form profile prose into the
+`profile-service` schema so the frontend can show it for review before saving.
+
+### `POST /profile/parse`
+
+Extract a free-form description of someone's background into the shape
+`PUT /profile` expects.
+
+- **Body:** `{raw_text}` — required, non-blank, max 20000 chars. No `email`
+  (this endpoint doesn't save anything).
+- **200:** `{message, profile: {full_name, skills: string[], projects: [{name, description}], experience: [{title, company, description}]}}`
+  — the model's output, coerced to exactly that shape (empty padding entries
+  dropped, everything trimmed, `company` left `""` when no employer was named,
+  never guessed). The frontend adds `email` and hands this to `PUT /profile`.
+- **400:** `raw_text` missing/blank/too long · **502:** Bedrock call failed or
+  returned unparseable JSON · **405:** wrong method
+- **Behavior worth knowing:** the prompt forbids inventing job titles, company
+  names, skills, or dates not present in the text — same anti-hallucination
+  discipline as `/tailor-generate`. The human review step in the frontend is
+  the real safety net, though.
+
+---
+
 ## `job-service` — ✅ reviewed (fixed: graceful degradation on embedding
 failure, email normalization, stricter field validation) · AWS-verified
 

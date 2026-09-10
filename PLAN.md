@@ -372,14 +372,25 @@ All three backend services are deployed and verified. The dashboard
 (`dashboard/`) still talks to the removed `cv-service` (`cvApi.ts` → `/cv`,
 `/cv/list`) and has no wiring to `profile-service`/`job-service`/`tailoring-service`.
 
-**First problem being worked: free-text experience → the profile-service JSON
-schema.** The product direction (and the `FreeformDemoPage` prototype) is that
-a user pastes/types their background as prose, not fills in a structured form —
-but `PUT /profile` needs `{skills[], projects[{name, description}],
-experience[{title, company?, description}]}`. Something has to do that
-transformation, and it can't be the browser (no way to call Bedrock from
-client JS without exposing credentials). Options under discussion — see the
-conversation; decision pending.
+**Free-text experience → the profile-service JSON schema — ✅ backend built,
+not yet AWS-verified.** The product direction (and the `FreeformDemoPage`
+prototype) is that a user pastes/types their background as prose, not fills in
+a structured form — but `PUT /profile` needs `{skills[], projects[{name,
+description}], experience[{title, company?, description}]}`. A new
+`intake-service` Lambda (`POST /profile/parse`) does the transformation with
+one Claude call. Chosen shape:
+- **Parse, don't save.** Returns the structured extraction unsaved; the
+  frontend renders it as editable fields, the user corrects anything wrong,
+  *then* the frontend calls the existing `PUT /profile`. The human review step
+  is the real defense against extraction hallucination — same concern we
+  fought in the generation direction.
+- **Its own Lambda, not a route on `profile-service` or `tailoring-service`.**
+  Keeps each service's job legible, and its IAM is minimal — Bedrock
+  generation model only, zero DynamoDB (it never saves).
+- Output is coerced to exactly the `PUT /profile` schema (empty entries
+  dropped, trimmed, `company` left blank when no employer named).
+
+Still to do: deploy + real test, then wire the frontend.
 
 ## Deferred / explicitly out of scope
 
