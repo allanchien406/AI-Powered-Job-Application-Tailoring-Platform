@@ -368,9 +368,26 @@ CloudWatch logs clean on both `profile-service` and `tailoring-service`.
 
 ## Frontend ↔ backend integration — 🚧 in progress
 
-All three backend services are deployed and verified. The dashboard
-(`dashboard/`) still talks to the removed `cv-service` (`cvApi.ts` → `/cv`,
-`/cv/list`) and has no wiring to `profile-service`/`job-service`/`tailoring-service`.
+All backend services are deployed and verified. The old `dashboard/`
+pages (`CVBuilderPage`, `MyCVsPage`) still reference the removed `cv-service`
+(`cvApi.ts` → `/cv`, `/cv/list`) — stale, but not yet ripped out.
+
+**Profile intake flow — ✅ wired end to end.** New `dashboard/src/api/backend.ts`
+(real client for `profile-service`/`intake-service`; default URL points at the
+staged deployment, override with `VITE_API_URL`) + new `ProfileIntakePage.tsx`
+at `/profile`: sign in → paste your background as prose → `POST /profile/parse`
+→ the result renders as editable fields (name, skill tags, experience,
+projects, all add/remove-able) → correct anything → **Save** calls
+`PUT /profile`. `LoginPage` now routes here after sign-in instead of the old
+builder. Verified by driving the whole flow in a headless browser against the
+real deployed backend: a pasted paragraph parsed correctly (companies where
+named, blank where not, jazz-band hobby excluded), an edit to the name
+persisted, and a direct `GET /profile` confirmed the round-trip. Zero console
+errors. See `TESTING.md`.
+
+Still to do: the tailoring half — job description input → `/tailor-generate` →
+show the generated CV — and deciding what happens to the stale
+`CVBuilderPage`/`MyCVsPage`/`cvApi.ts`.
 
 **Free-text experience → the profile-service JSON schema — ✅ backend built and
 tested against real AWS.** Two runs (a rambling casual paragraph, and a sparse
@@ -397,8 +414,6 @@ one Claude call. Chosen shape:
   generation model only, zero DynamoDB (it never saves).
 - Output is coerced to exactly the `PUT /profile` schema (empty entries
   dropped, trimmed, `company` left blank when no employer named).
-
-Still to do: deploy + real test, then wire the frontend.
 
 ## Deferred / explicitly out of scope
 

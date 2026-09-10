@@ -40,6 +40,25 @@ JavaScript, HTML, CSS, starting to learn TypeScript"):
 CloudWatch logs clean on both. **Status: works; `company` discipline held (no
 guessed employers); minor note on title inference.**
 
+**Test 3 — full frontend flow** (dev server + headless browser vs the real
+deployed backend): sign in with a fresh email → land on `/profile` → paste a
+paragraph ("data engineer at Streamline Corp… interned at a fintech company…
+built HabitDots in Svelte… play in a jazz band on weekends but that's just for
+fun") → click "Build my profile".
+
+- Parsed into the editable form: `full_name` "Riley Chen"; skills `[Python, ETL
+  pipelines, Postgres, SQL, Svelte]`; experience `[Data Engineer @ Streamline
+  Corp, Intern @ ""]` (internship company correctly blank — none was named);
+  project `[HabitDots]`. Jazz band hobby excluded.
+- Edited the name to "Riley Chen (edited)" → clicked **Save profile** → "Profile
+  saved ✓".
+- Direct `GET /profile` for that email confirmed the round-trip: `full_name`
+  = "Riley Chen (edited)" (the edit persisted), 2 experience, 1 project, skills
+  intact.
+- Zero browser console errors.
+
+**Status: profile intake flow wired end to end and verified against real AWS.**
+
 ---
 
 ## `tailoring-service`
