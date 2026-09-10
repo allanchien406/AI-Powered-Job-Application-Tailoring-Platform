@@ -216,8 +216,7 @@ item without specifying whose partition to read from.
     normalization, validation — actually runs): email normalization, the
     degradation path, and fence-stripping all confirmed correct when actually
     executed, not just read. `cdk synth` confirmed the resulting IAM policies
-    are scoped correctly per-service. Not yet deployed/AWS-verified — that's
-    the next step, same staged process as the other two services.
+    are scoped correctly per-service.
 
 ## Open decisions
 
@@ -236,8 +235,37 @@ item without specifying whose partition to read from.
 
 ## Known bugs, pending fix
 
-None currently outstanding. (See Resolved decisions below for the four
-`tailoring-service` bugs fixed together.)
+- 🐛 **Generation sometimes fabricates an employer name — found during
+  real-Bedrock testing, once the Marketplace blocker below was resolved.**
+  Given an ad-hoc JD for "Acme Corp," the model's `generated_cv.experience`
+  included `"company": "Acme Corp"` — the *target* company, not a real past
+  employer — attached to a description drawn from the candidate's actual
+  project work. A second call (saved-job path, same underlying profile)
+  correctly wrote `"company": "Not specified"` for the same missing-data
+  situation, so this is inconsistent, not a hard rule the model always
+  breaks. Root cause: `profile_data.experience` entries only ever store
+  `title`/`description` — there's no company/employer field anywhere in the
+  schema — yet the generation schema in the system prompt still asks for
+  `"company"` on every entry, so the model has nothing real to put there and
+  sometimes reaches for the one company name sitting in the prompt
+  (`target_role.company_name`) instead of abstaining. Violates the system
+  prompt's own "don't invent employers... not present in the input"
+  instruction. Not yet fixed — options include instructing the model
+  explicitly to use a fixed placeholder (never the target company's name)
+  when no employer is given, and/or adding a company field to the profile
+  schema so real data exists to draw from.
+
+## External blocker (RESOLVED)
+
+- ✅ Was: Claude Haiku 4.5 generation blocked by
+  `AccessDeniedException: ... INVALID_PAYMENT_INSTRUMENT: A valid payment
+  instrument must be provided` on this AWS account's Marketplace
+  subscription. Root cause was an expired card on the account — fixed by the
+  user directly in AWS Billing; confirmed working ~60s after the fix via a
+  direct `converse` call, then confirmed again through the actual deployed
+  `/tailor-generate` endpoint (see AWS verification status below). Kept here
+  as a record of the diagnosis process (ruled out IAM/ARN/code first) in case
+  something similar recurs.
 
 ## AWS verification status
 
@@ -258,7 +286,21 @@ None currently outstanding. (See Resolved decisions below for the four
   partition-key scoping is structural, not just an unchecked assumption.
   CloudWatch logs clean across every test call. Confirmed independently via
   the manual test plan, per the testing workflow.
-- Not yet reviewed, deployed, or verified: `tailoring-service`.
+- 🚧 **`tailoring-service`** — deployed to the same staged stack.
+  `POST /tailor-preview` fully verified (keyword matching, `prompt_context`
+  with `raw_job_description`, zero Bedrock calls). `POST /tailor-generate`'s
+  full pipeline confirmed working end to end once the Marketplace blocker was
+  resolved: both the saved-job and ad-hoc paths return real `generated_cv`
+  output, semantic matching demonstrably caught a paraphrase-only match with
+  zero keyword overlap (an experience entry about "Bittide protocol" scored
+  0.112 against a JD asking for AWS/Linux/CI-CD and was correctly used in the
+  generated summary), and CloudWatch logs are clean across every test call.
+  Not marked fully ✅ yet — not because the deploy failed, but because the
+  fabricated-employer-name bug above was found during this same testing and
+  should be resolved (or explicitly accepted) before calling generation
+  quality verified, not just generation connectivity. Automated verification
+  done by me; manual confirmation from the user still pending, per the
+  testing workflow.
 
 ## Deferred / explicitly out of scope
 
