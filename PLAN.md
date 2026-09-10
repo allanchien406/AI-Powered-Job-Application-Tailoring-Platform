@@ -292,10 +292,16 @@ fabricated-employer-name fix.)
 
 ## AWS verification status
 
-⚠️ The `company` field addition (schema + `entry_text_unchanged` backward-compat
-fix in `profile-service`; the matching/prompt updates in `tailoring-service`)
-is verified only via local execution-based tests so far — not yet redeployed
-or re-checked against live AWS. The ✅ statuses below predate that change.
+✅ **The `company` field addition is now AWS-verified too**, redeployed and
+retested on top of the statuses below: resaving the existing test profile
+*without* `company` (simulating an old client) left the stored embedding
+byte-for-byte unchanged (the backward-compat fix works), resaving *with* a
+real company name correctly triggered a fresh embed, and the real value
+(`"Bittide Labs"`) flowed all the way through to a live `/tailor-generate`
+call — showing up correctly on the matching experience entry while the
+project-based entry (which genuinely has no employer) still correctly said
+`"Not specified"`, and the target company was never used as a fake employer.
+CloudWatch logs clean on both `profile-service` and `tailoring-service`.
 
 - ✅ **`profile-service`** — deployed to real AWS (account `681583877402`,
   `us-east-1`) via the staged process above and manually verified: `PUT`/`GET
