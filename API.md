@@ -89,9 +89,10 @@ List every job description saved by a user.
 
 ---
 
-## `tailoring-service` — ✅ reviewed (fixed: email normalization, graceful
-degradation on embedding failure, defensive markdown-fence parsing, correct
-Claude Haiku 4.5 model ID + IAM ARNs) — not yet AWS-verified
+## `tailoring-service` — ✅ reviewed and deployed (fixed: email normalization,
+graceful degradation on embedding failure, defensive markdown-fence parsing,
+correct Claude Haiku 4.5 model ID + IAM ARNs, generation fabricating an
+employer name) — AWS-verified pending final manual confirmation (see `PLAN.md`)
 
 Source: `infra/lambda/tailoring-service/index.py`. Reads `ProfilesTable` and
 `JobDescriptionsTable` directly (read-only — never writes either).

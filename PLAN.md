@@ -217,6 +217,17 @@ item without specifying whose partition to read from.
     degradation path, and fence-stripping all confirmed correct when actually
     executed, not just read. `cdk synth` confirmed the resulting IAM policies
     are scoped correctly per-service.
+- ✅ **Fixed generation fabricating an employer name.** The system prompt in
+  `call_bedrock_for_tailoring` now explicitly says the candidate's data has no
+  company/period fields at all, to write `"Not specified"` for both rather
+  than guessing, and to never write `target_role.company_name` as an
+  experience entry's `"company"` — that's the job being applied to, not
+  somewhere the candidate worked. Verified against real Bedrock, not just
+  read: redeployed and re-ran the exact case that had hallucinated
+  (`"Catalyst Cloud"` and `"Acme Corp"` both previously appeared as fabricated
+  employers) five times across both the saved-job and ad-hoc paths — zero
+  hallucinations, `"Not specified"` written consistently every time. Manual
+  confirmation from the user still pending, per the testing workflow.
 
 ## Open decisions
 
@@ -235,25 +246,8 @@ item without specifying whose partition to read from.
 
 ## Known bugs, pending fix
 
-- 🐛 **Generation sometimes fabricates an employer name — found during
-  real-Bedrock testing, once the Marketplace blocker below was resolved.**
-  Given an ad-hoc JD for "Acme Corp," the model's `generated_cv.experience`
-  included `"company": "Acme Corp"` — the *target* company, not a real past
-  employer — attached to a description drawn from the candidate's actual
-  project work. A second call (saved-job path, same underlying profile)
-  correctly wrote `"company": "Not specified"` for the same missing-data
-  situation, so this is inconsistent, not a hard rule the model always
-  breaks. Root cause: `profile_data.experience` entries only ever store
-  `title`/`description` — there's no company/employer field anywhere in the
-  schema — yet the generation schema in the system prompt still asks for
-  `"company"` on every entry, so the model has nothing real to put there and
-  sometimes reaches for the one company name sitting in the prompt
-  (`target_role.company_name`) instead of abstaining. Violates the system
-  prompt's own "don't invent employers... not present in the input"
-  instruction. Not yet fixed — options include instructing the model
-  explicitly to use a fixed placeholder (never the target company's name)
-  when no employer is given, and/or adding a company field to the profile
-  schema so real data exists to draw from.
+None currently outstanding. (See Resolved decisions for the
+fabricated-employer-name fix.)
 
 ## External blocker (RESOLVED)
 
@@ -295,12 +289,12 @@ item without specifying whose partition to read from.
   zero keyword overlap (an experience entry about "Bittide protocol" scored
   0.112 against a JD asking for AWS/Linux/CI-CD and was correctly used in the
   generated summary), and CloudWatch logs are clean across every test call.
-  Not marked fully ✅ yet — not because the deploy failed, but because the
-  fabricated-employer-name bug above was found during this same testing and
-  should be resolved (or explicitly accepted) before calling generation
-  quality verified, not just generation connectivity. Automated verification
-  done by me; manual confirmation from the user still pending, per the
-  testing workflow.
+  The fabricated-employer-name bug found during this testing is fixed and
+  reverified (5/5 calls across both paths now correctly write
+  `"Not specified"` instead of hallucinating an employer). Not marked fully
+  ✅ yet purely because manual confirmation from the user is still pending,
+  per the testing workflow — nothing left outstanding on the code/deploy
+  side.
 
 ## Deferred / explicitly out of scope
 
