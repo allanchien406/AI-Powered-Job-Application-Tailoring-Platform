@@ -142,15 +142,22 @@ runs):
   scored **0.38**; the one relevant project (pure paraphrase, *zero* keyword
   overlap — "backend server / relational database" vs the JD's "databases /
   full-stack web applications") scored **0.14**. `0.10` sits just above the
-  hobby ceiling with margin below that weakest real match.
+  hobby ceiling with margin below that weakest real match. Re-run with the
+  threshold: only the two real entries survived, all six hobbies dropped.
+- **Test 2 (adversarial)** — a data-analyst JD, with a genuinely relevant but
+  weakly-phrased experience ("tracked sales numbers", "dug into the figures" —
+  no JD keywords) and a *hobby deliberately written to sound technical*
+  ("Fantasy Football League Manager… tracked player statistics in
+  spreadsheets, calculated weekly scores"). Result: the weak real match scored
+  **0.206** and survived; the technical-sounding hobby scored **below 0.10**
+  and was dropped. The embedding distinguished shared vocabulary from actual
+  relevance — the failure mode most at risk from a threshold, and it held.
 
-Known limits of this number: it's calibrated from synthetic profiles, and the
-gap between "weak real paraphrase" (~0.14) and "hobby noise" (~0.09) is thin —
-a slightly weaker paraphrase or a hobby written in professional-sounding
-language could land in that band and be misclassified either way. Erring
-toward recall (keep weak matches) because catching paraphrases keyword
-matching misses is the entire reason semantic scoring exists. Revisit as real
-usage data accumulates.
+Known limits: still only two synthetic profiles. The gap between "weak real
+paraphrase" (~0.14) and "hobby noise" (~0.09) is thin, so a borderline case
+could still go either way. Erring toward recall (keep weak matches) because
+catching paraphrases keyword matching misses is the entire reason semantic
+scoring exists. Revisit as real usage data accumulates.
 
 ## Generation — ✅ implemented
 
