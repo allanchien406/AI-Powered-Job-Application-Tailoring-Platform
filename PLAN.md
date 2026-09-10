@@ -351,21 +351,35 @@ CloudWatch logs clean on both `profile-service` and `tailoring-service`.
   partition-key scoping is structural, not just an unchecked assumption.
   CloudWatch logs clean across every test call. Confirmed independently via
   the manual test plan, per the testing workflow.
-- 🚧 **`tailoring-service`** — deployed to the same staged stack.
-  `POST /tailor-preview` fully verified (keyword matching, `prompt_context`
-  with `raw_job_description`, zero Bedrock calls). `POST /tailor-generate`'s
-  full pipeline confirmed working end to end once the Marketplace blocker was
-  resolved: both the saved-job and ad-hoc paths return real `generated_cv`
-  output, semantic matching demonstrably caught a paraphrase-only match with
-  zero keyword overlap (an experience entry about "Bittide protocol" scored
-  0.112 against a JD asking for AWS/Linux/CI-CD and was correctly used in the
-  generated summary), and CloudWatch logs are clean across every test call.
-  The fabricated-employer-name bug found during this testing is fixed and
-  reverified (5/5 calls across both paths now correctly write
-  `"Not specified"` instead of hallucinating an employer). Not marked fully
-  ✅ yet purely because manual confirmation from the user is still pending,
-  per the testing workflow — nothing left outstanding on the code/deploy
-  side.
+- ✅ **`tailoring-service`** — deployed to the same staged stack and verified.
+  `POST /tailor-preview` (keyword matching, `prompt_context` with
+  `raw_job_description`, zero Bedrock calls) and `POST /tailor-generate`
+  (both saved-job and ad-hoc paths) both work end to end. Along the way, three
+  things were found via real testing and fixed + reverified: the external
+  Marketplace/billing blocker (resolved), the fabricated-employer-name
+  hallucination (prompt fix + `company` schema field, 5/5 clean), and the
+  `MIN_SEMANTIC_SCORE = 0.10` threshold (calibrated and validated against two
+  test profiles — see "Threshold calibration" and `TESTING.md`). CloudWatch
+  logs clean throughout. Automated verification by me across all rounds; the
+  user reviewed the manual test plans and elected to move on to frontend
+  integration rather than re-run each round by hand.
+
+**Next up: frontend ↔ backend integration** — see the section below.
+
+## Frontend ↔ backend integration — 🚧 in progress
+
+All three backend services are deployed and verified. The dashboard
+(`dashboard/`) still talks to the removed `cv-service` (`cvApi.ts` → `/cv`,
+`/cv/list`) and has no wiring to `profile-service`/`job-service`/`tailoring-service`.
+
+**First problem being worked: free-text experience → the profile-service JSON
+schema.** The product direction (and the `FreeformDemoPage` prototype) is that
+a user pastes/types their background as prose, not fills in a structured form —
+but `PUT /profile` needs `{skills[], projects[{name, description}],
+experience[{title, company?, description}]}`. Something has to do that
+transformation, and it can't be the browser (no way to call Bedrock from
+client JS without exposing credentials). Options under discussion — see the
+conversation; decision pending.
 
 ## Deferred / explicitly out of scope
 
@@ -375,9 +389,8 @@ CloudWatch logs clean on both `profile-service` and `tailoring-service`.
 - ⏸ **CV persistence.** Dropped along with `cv-service`. No backend for
   saving/loading a generated or edited CV until the dashboard redesign defines a
   new approach.
-- ⏸ **Frontend wiring.** `dashboard/src/api/cvApi.ts` calls to `/cv` and
-  `/cv/list` will break once those routes are gone — expected, not a regression,
-  since the dashboard is being redesigned regardless.
+- 🚧 **Frontend wiring** — now the active piece of work (moved out of deferred).
+  See "Frontend ↔ backend integration" above.
 - ⏸ **Profile schema gap.** `CVData` needs `title`/`phone`/`location`/`website`/
   `linkedin`/`education`; `profile_data` doesn't carry those. `generated_cv`
   leaves them blank rather than inventing them.
