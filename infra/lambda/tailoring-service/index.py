@@ -63,6 +63,17 @@ SKILL_ALIASES = {
     "github actions": "github actions",
 }
 
+# Semantic matches (cosine similarity) below this are dropped as noise in
+# /tailor-generate. Set from a synthetic test — a mixed IT+hobby profile vs a
+# software-engineer JD: hobby entries scored 0.03-0.09, a keyword-free
+# paraphrase match scored 0.14, a keyword-reinforced match scored 0.38. 0.10
+# sits just above the observed hobby ceiling with margin below the weakest
+# real match. This is thin data (one profile) — revisit with more real runs;
+# err toward keeping weak matches, since catching paraphrases is the point.
+# Entries that couldn't be embedded at all (Bedrock failure) are exempt —
+# a failure shouldn't silently drop an entry.
+MIN_SEMANTIC_SCORE = 0.10
+
 
 class DecimalEncoder(json.JSONEncoder):
     """DynamoDB returns numbers as Decimal; json.dumps doesn't know how to
@@ -314,11 +325,9 @@ def score_entries_with_semantics(entries, jd_vector, title_field, description_fi
     and the JD's embedding — no keyword component at all (unlike
     /tailor-preview, which stays keyword-only since it never calls Bedrock).
 
-    Every entry is scored and returned, not filtered by a hard threshold:
-    there's no validated cutoff yet for what a "good" cosine similarity looks
-    like on real profile/JD pairs, so ranking plus build_prompt_context's
-    top-3 cap is safer than an arbitrary absolute score threshold picked
-    without data. Revisit once this has run against real embeddings.
+    Entries scoring below MIN_SEMANTIC_SCORE are dropped as noise (see that
+    constant for the data behind the number). Remaining entries are returned
+    ranked best-first; build_prompt_context still caps the prompt at the top 3.
 
     extra_fields carries through additional entry fields as-is (not scored,
     not embedded) — used for "company" on experience entries, so the
@@ -335,10 +344,16 @@ def score_entries_with_semantics(entries, jd_vector, title_field, description_fi
         description_text = entry.get(description_field, "")
 
         entry_vector = to_float_vector(entry.get("embedding"))
+        embedding_failed = False
         if entry_vector is None:
             # Safety net for entries saved before embeddings existed.
             entry_vector = safe_embed_text(f"{title_text} {description_text}")
+            embedding_failed = entry_vector is None
         semantic_score = cosine_similarity(jd_vector, entry_vector) if entry_vector else 0.0
+
+        # Drop noise — but not an entry we simply couldn't embed.
+        if not embedding_failed and semantic_score < MIN_SEMANTIC_SCORE:
+            continue
 
         scored_entry = {
             title_field: title_text,

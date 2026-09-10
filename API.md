@@ -123,7 +123,8 @@ Full pipeline: pure-embedding matching (no keyword component — see
 - **400:** missing required field · **404:** profile or job not found (saved-job
   path only) · **502:** Bedrock call failed or returned unparseable JSON
 - **Behavior worth knowing:** unlike `/tailor-preview`, matching here has no
-  keyword component at all — every project/experience entry is ranked purely
-  by cosine similarity against the JD's embedding, with no hard score cutoff
-  (there's no validated threshold yet; the top-3 cap in `prompt_context` does
-  the filtering instead).
+  keyword component at all — every project/experience entry is ranked by cosine
+  similarity against the JD's embedding, then entries below `MIN_SEMANTIC_SCORE`
+  (`0.10`) are dropped as noise (calibrated from a real test — see `PLAN.md`;
+  entries that couldn't be embedded at all are exempt). What survives is ranked
+  best-first, then `prompt_context` caps at the top 3.
