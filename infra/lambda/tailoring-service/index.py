@@ -403,7 +403,11 @@ def call_bedrock_for_tailoring(prompt_context):
         '{"title": string, "summary": string, "experience": '
         '[{"company": string, "role": string, "period": string, "description": string}]}. '
         "Only use facts present in the candidate's matched projects and experience "
-        "below — do not invent employers, dates, or achievements that are not present in the input."
+        "below — do not invent employers, dates, or achievements that are not present in the input. "
+        "The candidate's matched projects and experience do not include company names or dates: "
+        'for "company" and "period", write exactly "Not specified" rather than guessing. '
+        'Never write target_role.company_name as an experience entry\'s "company" — that is the '
+        "job the candidate is applying TO, not somewhere they have worked."
     )
 
     resp = bedrock_runtime.converse(
