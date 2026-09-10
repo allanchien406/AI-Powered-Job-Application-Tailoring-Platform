@@ -124,6 +124,20 @@ export class InfraStack extends cdk.Stack {
     tailoringServiceHandler.addToRolePolicy(bedrockEmbeddingPolicy);
     tailoringServiceHandler.addToRolePolicy(bedrockGenerationPolicy);
 
+    // --- Intake service Lambda ---
+    // Turns free-form profile text into the profile-service JSON schema via one
+    // Claude call. Never touches DynamoDB — it returns the parsed structure for
+    // the user to review, and the frontend then hands the approved version to
+    // PUT /profile. So: generation model only, no table access.
+    const intakeServiceHandler = new Function(this, "IntakeServiceHandler", {
+      runtime: Runtime.PYTHON_3_12,
+      handler: "index.handler",
+      code: Code.fromAsset("lambda/intake-service"),
+      timeout: cdk.Duration.seconds(30), // one Converse call, input can be long
+      environment: { BEDROCK_MODEL_ID },
+    });
+    intakeServiceHandler.addToRolePolicy(bedrockGenerationPolicy);
+
     // --- HTTP API Gateway ---
     const api = new HttpApi(this, "ProfileServiceApi", {
       apiName: "profileservice-http-api",
@@ -143,6 +157,15 @@ export class InfraStack extends cdk.Stack {
       integration: new HttpLambdaIntegration(
         "ProfileServiceHandlerIntegration",
         profileServiceHandler,
+      ),
+    });
+
+    api.addRoutes({
+      path: "/profile/parse",
+      methods: [cdk.aws_apigatewayv2.HttpMethod.POST],
+      integration: new HttpLambdaIntegration(
+        "IntakeServiceHandlerIntegration",
+        intakeServiceHandler,
       ),
     });
 

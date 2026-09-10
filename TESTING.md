@@ -77,7 +77,69 @@ Rather than *only* instructing the model to say "Not specified," added a real `c
 
 CloudWatch logs clean on both `profile-service` and `tailoring-service` across this whole round.
 
-**Current status:** all four rounds pass; `tailoring-service` is deployed and AWS-verified per `PLAN.md`.
+### Round 5 — matching accuracy + threshold calibration
+
+Purpose: measure how well pure-embedding matching actually separates relevant
+entries from noise, on a realistic profile.
+
+**Setup:** profile `casey.multitest@example.com` — 4 experience + 4 project
+entries, only *one of each* IT-related, the rest hobbies (weekend trail guide,
+community choir, amateur astronomer, vegetable garden, sourdough bread,
+birdwatching journal). Job: a Software Engineer role mentioning Python, AWS,
+databases, full-stack web apps, agile.
+
+**Before adding a threshold** — cosine scores (all entries returned, ranked):
+
+| Entry | Semantic score | Keyword score |
+|---|---|---|
+| Backend Developer *(relevant, has a literal "python" hit)* | **0.379** | 2 |
+| Community Choir Member *(hobby)* | 0.086 | 0 |
+| Amateur Astronomer *(hobby)* | 0.035 | 0 |
+| Budget Tracker Web App *(relevant project, **zero** keyword overlap)* | **0.143** | 0 |
+| Backyard Vegetable Garden *(hobby)* | 0.079 | 0 |
+| Birdwatching Journal *(hobby)* | 0.044 | 0 |
+
+- `/tailor-preview` (keyword-only) found the Backend Developer experience but
+  **zero projects** — the relevant project shares no whitelist term with the
+  JD. Exactly the blind spot semantic matching exists to close.
+- Directionally correct: the one relevant entry outranked every hobby in both
+  categories. But the margin for the *pure-paraphrase* project (0.143 vs the
+  top hobby's 0.086) is much thinner than for the keyword-reinforced
+  experience (0.379 vs 0.086).
+- Filtering of hobby content out of the *final CV* came from the generation
+  model's own judgment, not the pipeline — all entries were still in the
+  prompt.
+
+**Added `MIN_SEMANTIC_SCORE = 0.10`.** Re-ran the same profile:
+- `matched_experiences`: `[Backend Developer 0.379]` only.
+- `matched_projects`: `[Budget Tracker Web App 0.143]` only.
+- All six hobby entries dropped. Generated CV used only the two real sources,
+  no hobby leakage. **PASS.**
+
+**Test 2 — adversarial** (`dana.analyst@example.com`, ad-hoc Data Analyst JD
+about metrics / dashboards / SQL / spreadsheets / stakeholders):
+
+| Entry | Score | Kept? |
+|---|---|---|
+| Operations Coordinator *(relevant, weak paraphrase — "tracked sales numbers", "dug into the figures", **zero** JD keywords)* | 0.206 | ✅ kept |
+| Household Budget Spreadsheet *(relevant project, casual phrasing)* | 0.141 | ✅ kept |
+| Fantasy Football League Manager *(hobby, deliberately loaded with "tracked player statistics in spreadsheets, calculated weekly scores")* | below 0.10 | ✅ **dropped** |
+| Pottery Class Attendee *(hobby)* | below 0.10 | dropped |
+| Appalachian Trail Section Hike *(hobby project)* | below 0.10 | dropped |
+
+- Both weak-but-real paraphrase matches survived — no over-filtering.
+- The technical-adjacent hobby (fantasy football with statistics/spreadsheets
+  vocabulary) was correctly dropped — the embedding distinguished *shared
+  words* from *actual relevance*. This was the failure mode most at risk from
+  a threshold, and it held.
+- Generated CV clean: only the two real sources, correct company attribution,
+  no hobby content.
+
+CloudWatch logs clean across all of Round 5.
+
+**Current status:** all five rounds pass; `tailoring-service` deployed and
+AWS-verified per `PLAN.md`. The 0.10 threshold is validated against two
+profiles — still thin data, `MIN_SEMANTIC_SCORE` is a one-line change to tune.
 
 ---
 
