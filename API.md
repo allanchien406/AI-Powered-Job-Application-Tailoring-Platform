@@ -28,7 +28,10 @@ Fetch a profile by email.
 
 Create or fully replace a profile (upsert by `email`).
 
-- **Body:** `{email, full_name?, skills?: string[], projects?: [{name, description}], experience?: [{title, company?, description}]}`
+- **Body:** `{email, full_name?, skills?: string[], projects?: [{name, period?, description}], experience?: [{title, company?, period?, description}], education?: [{institution, degree, period?, description?}]}`
+  — `period` and `company`/`institution` are all optional (blank when unknown).
+  `education` entries get no embedding and aren't used for matching (like
+  `skills`); they pass straight through to the generation prompt.
 - **200:** `{message, ...same shape as GET}`, plus `embedding_warnings: string[]`
   **only if** embedding a new/changed entry failed (save still succeeds either
   way — see `PLAN.md`'s graceful-degradation note)
@@ -53,10 +56,11 @@ Extract a free-form description of someone's background into the shape
 
 - **Body:** `{raw_text}` — required, non-blank, max 20000 chars. No `email`
   (this endpoint doesn't save anything).
-- **200:** `{message, profile: {full_name, skills: string[], projects: [{name, description}], experience: [{title, company, description}]}}`
+- **200:** `{message, profile: {full_name, skills: string[], projects: [{name, period, description}], experience: [{title, company, period, description}], education: [{institution, degree, period, description}]}}`
   — the model's output, coerced to exactly that shape (empty padding entries
-  dropped, everything trimmed, `company` left `""` when no employer was named,
-  never guessed). The frontend adds `email` and hands this to `PUT /profile`.
+  dropped, everything trimmed, `company`/`institution`/`period` left `""` when
+  not stated, never guessed). The frontend adds `email` and hands this to
+  `PUT /profile`.
 - **400:** `raw_text` missing/blank/too long · **502:** Bedrock call failed or
   returned unparseable JSON · **405:** wrong method
 - **Behavior worth knowing:** the prompt forbids inventing job titles, company
@@ -140,11 +144,12 @@ Full pipeline: pure-embedding matching (no keyword component — see
 - **Body:** either `{email, job_id}` (a previously saved job) **or**
   `{email, company_name, job_title, raw_description}` (ad-hoc — never
   persisted, embedded fresh on the spot)
-- **200:** `{message, email, prompt_context, generated_cv: {title, summary, experience: [{company, role, period, description}]}}`
+- **200:** `{message, email, prompt_context, generated_cv: {title, summary, experience: [{company, role, period, description}], education: [{institution, degree, period}]}}`
   — `prompt_context` includes `raw_job_description` (the actual JD text, not a
-  keyword-extracted proxy), `matched_projects` (`{name, description, score}`)
-  and `matched_experiences` (`{title, company, description, score}` — `company`
-  is the profile's real value if one was saved, `""` otherwise), ranked by
+  keyword-extracted proxy), `matched_projects` (`{name, period, description, score}`),
+  `matched_experiences` (`{title, company, period, description, score}` —
+  `company`/`period` are the profile's real values if saved, `""` otherwise),
+  and `education` (all of it, un-scored), ranked by
   cosine similarity, top 3 only
 - **400:** missing required field · **404:** profile or job not found (saved-job
   path only) · **502:** Bedrock call failed or returned unparseable JSON

@@ -192,6 +192,7 @@ def score_projects(profile, extracted_requirements):
             continue
 
         project_name = project.get("name", "")
+        project_period = project.get("period", "")
         project_description = project.get("description", "")
 
         title_score, title_matches = score_text_against_requirements(project_name, extracted_requirements, 4)
@@ -206,6 +207,7 @@ def score_projects(profile, extracted_requirements):
             scored_projects.append(
                 {
                     "name": project_name,
+                    "period": project_period,
                     "description": project_description,
                     "score": total_score,
                     "matched_terms": matched_terms,
@@ -228,6 +230,7 @@ def score_experience(profile, extracted_requirements):
 
         experience_title = experience.get("title", "")
         experience_company = experience.get("company", "")
+        experience_period = experience.get("period", "")
         experience_description = experience.get("description", "")
 
         title_score, title_matches = score_text_against_requirements(experience_title, extracted_requirements, 4)
@@ -243,6 +246,7 @@ def score_experience(profile, extracted_requirements):
                 {
                     "title": experience_title,
                     "company": experience_company,
+                    "period": experience_period,
                     "description": experience_description,
                     "score": total_score,
                     "matched_terms": matched_terms,
@@ -370,25 +374,40 @@ def score_entries_with_semantics(entries, jd_vector, title_field, description_fi
 
 def score_projects_with_semantics(profile, jd_vector):
     """score_entries_with_semantics, specialized for the projects list."""
-    return score_entries_with_semantics(profile.get("projects", []), jd_vector, "name", "description")
+    return score_entries_with_semantics(
+        profile.get("projects", []), jd_vector, "name", "description", extra_fields=("period",)
+    )
 
 
 def score_experience_with_semantics(profile, jd_vector):
     """score_entries_with_semantics, specialized for the experience list."""
     return score_entries_with_semantics(
-        profile.get("experience", []), jd_vector, "title", "description", extra_fields=("company",)
+        profile.get("experience", []), jd_vector, "title", "description", extra_fields=("company", "period")
     )
+
+
+def education_for_prompt(profile):
+    """Education passes through in full — no embedding, no matching (like
+    skills). Everyone lists all their education regardless of the job. Just
+    strip anything internal and cap at a sane number."""
+    entries = profile.get("education", []) or []
+    return [
+        {k: v for k, v in entry.items() if k != "embedding"}
+        for entry in entries[:5]
+        if isinstance(entry, dict)
+    ]
 
 
 def build_prompt_context(profile, job_description, matched_projects, matched_experiences):
     """Assemble the compact payload sent to Bedrock for generation: who the
     candidate is, what role they're targeting, the actual job description
     text (not a keyword-extracted proxy — the model reads the real posting
-    directly rather than a KNOWN_SKILLS-filtered list), and only the top few
+    directly rather than a KNOWN_SKILLS-filtered list), the top few
     highest-scored projects/experience entries (capped at 3 each) rather than
-    the candidate's whole profile. Shared with /tailor-preview's response too
-    (which never sends this to Bedrock — it's returned for reference only),
-    so both routes describe "what would be sent to the model" the same way."""
+    the candidate's whole profile, and their education (all of it). Shared
+    with /tailor-preview's response too (which never sends this to Bedrock —
+    it's returned for reference only), so both routes describe "what would be
+    sent to the model" the same way."""
     return {
         "candidate": {
             "full_name": profile.get("full_name", ""),
@@ -401,6 +420,7 @@ def build_prompt_context(profile, job_description, matched_projects, matched_exp
         "raw_job_description": job_description.get("raw_description", ""),
         "matched_projects": matched_projects[:3],
         "matched_experiences": matched_experiences[:3],
+        "education": education_for_prompt(profile),
     }
 
 
@@ -423,18 +443,22 @@ def call_bedrock_for_tailoring(prompt_context):
     a fabricated CV is actively harmful, not just a quality miss."""
     system_prompt = (
         "You are a CV tailoring assistant. Given a candidate's matched projects and "
-        "experience and a target job, produce a tailored CV section. "
+        "experience, their education, and a target job, produce a tailored CV section. "
         "Respond with ONLY valid JSON matching this schema: "
-        '{"title": string, "summary": string, "experience": '
-        '[{"company": string, "role": string, "period": string, "description": string}]}. '
-        "Only use facts present in the candidate's matched projects and experience "
-        "below — do not invent employers, dates, or achievements that are not present in the input. "
-        'For each experience entry, use its own "company" field if one is given and non-empty. '
-        'If it is missing or blank, write exactly "Not specified" rather than guessing — this '
-        "includes matched projects, which never have a company at all. The candidate's data "
-        'never includes dates, so always write "Not specified" for "period". Never write '
+        '{"title": string, "summary": string, '
+        '"experience": [{"company": string, "role": string, "period": string, "description": string}], '
+        '"education": [{"institution": string, "degree": string, "period": string}]}. '
+        "Only use facts present in the candidate's matched projects, experience, and "
+        "education below — do not invent employers, institutions, degrees, dates, or "
+        "achievements that are not present in the input. "
+        'For each entry\'s "company"/"institution", "period", and other fields: use the '
+        'value from the candidate\'s data if it is given and non-empty; if it is missing '
+        'or blank, write exactly "Not specified" rather than guessing. Matched projects '
+        'have no company — write "Not specified" for those. Never write '
         'target_role.company_name as an experience entry\'s "company" — that is the job the '
-        "candidate is applying TO, not somewhere they have worked, even when no real company is given."
+        "candidate is applying TO, not somewhere they have worked. "
+        "Include every education entry from the candidate's data; leave \"education\" as "
+        "an empty array if they gave none."
     )
 
     resp = bedrock_runtime.converse(

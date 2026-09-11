@@ -80,8 +80,9 @@ def normalize_profile_payload(data):
         "full_name": full_name.strip() if isinstance(full_name, str) else "",
         "email": email.strip().lower() if isinstance(email, str) else "",
         "skills": normalize_string_list(data.get("skills")),
-        "projects": normalize_entry_list(data.get("projects"), ["name", "description"]),
-        "experience": normalize_entry_list(data.get("experience"), ["title", "company", "description"]),
+        "projects": normalize_entry_list(data.get("projects"), ["name", "period", "description"]),
+        "experience": normalize_entry_list(data.get("experience"), ["title", "company", "period", "description"]),
+        "education": normalize_entry_list(data.get("education"), ["institution", "degree", "period", "description"]),
     }
 
 
@@ -117,6 +118,11 @@ def entry_text_unchanged(existing_entry, new_entry, text_keys):
 def attach_embeddings(new_entries, existing_entries, text_keys):
     """Reuse a cached embedding for an entry whose text hasn't changed since the
     last save; only call Bedrock for entries that are new or edited.
+
+    `text_keys` is the embed-relevant subset of an entry's fields, not all of
+    them — e.g. `period` (dates) is deliberately left out: it's not semantic
+    content worth embedding, and editing only the dates shouldn't trigger a
+    re-embed. The full entry (including `period`) is still what gets stored.
 
     Matched by identity field (the first of text_keys — "name" for projects,
     "title" for experience) rather than array position, so reordering entries or
@@ -195,6 +201,8 @@ def save_profile(table, normalized_profile):
         "skills": normalized_profile["skills"],
         "projects": projects,
         "experience": experience,
+        # Education is stored as-is — no embeddings, no matching (like skills).
+        "education": normalized_profile["education"],
         "created_at": existing.get("created_at", now_iso()),
         "updated_at": now_iso(),
     }

@@ -21,11 +21,20 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export interface ExperienceEntry {
   title: string;
   company: string;
+  period: string;
   description: string;
 }
 
 export interface ProjectEntry {
   name: string;
+  period: string;
+  description: string;
+}
+
+export interface EducationEntry {
+  institution: string;
+  degree: string;
+  period: string;
   description: string;
 }
 
@@ -34,6 +43,7 @@ export interface Profile {
   skills: string[];
   projects: ProjectEntry[];
   experience: ExperienceEntry[];
+  education: EducationEntry[];
 }
 
 export interface StoredProfile extends Profile {

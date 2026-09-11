@@ -8,6 +8,7 @@ import {
   Profile,
   ExperienceEntry,
   ProjectEntry,
+  EducationEntry,
 } from '../api/backend';
 
 const PLACEHOLDER = `Just describe your background however it comes out.
@@ -19,7 +20,13 @@ AWS too."`;
 
 type Stage = 'paste' | 'parsing' | 'review' | 'saving' | 'saved';
 
-const emptyProfile: Profile = { full_name: '', skills: [], projects: [], experience: [] };
+const emptyProfile: Profile = {
+  full_name: '',
+  skills: [],
+  projects: [],
+  experience: [],
+  education: [],
+};
 
 export const ProfileIntakePage: React.FC = () => {
   const navigate = useNavigate();
@@ -82,6 +89,12 @@ export const ProfileIntakePage: React.FC = () => {
     setProfile((p) => ({
       ...p,
       projects: p.projects.map((e, idx) => (idx === i ? { ...e, ...patch } : e)),
+    }));
+
+  const updateEducation = (i: number, patch: Partial<EducationEntry>) =>
+    setProfile((p) => ({
+      ...p,
+      education: p.education.map((e, idx) => (idx === i ? { ...e, ...patch } : e)),
     }));
 
   return (
@@ -174,6 +187,7 @@ export const ProfileIntakePage: React.FC = () => {
                   <Input value={exp.title} onChange={(e) => updateExperience(i, { title: e.target.value })} placeholder="Role / title" />
                   <Input value={exp.company} onChange={(e) => updateExperience(i, { company: e.target.value })} placeholder="Company (optional)" />
                 </div>
+                <Input value={exp.period} onChange={(e) => updateExperience(i, { period: e.target.value })} placeholder="Period, e.g. 2020–2023 (optional)" style={{ marginBottom: '8px' }} />
                 <TextArea rows={2} value={exp.description} onChange={(e) => updateExperience(i, { description: e.target.value })} placeholder="What you did" />
                 <Button
                   variant="ghost"
@@ -186,7 +200,7 @@ export const ProfileIntakePage: React.FC = () => {
             ))}
             <Button
               variant="ghost"
-              onClick={() => setProfile((p) => ({ ...p, experience: [...p.experience, { title: '', company: '', description: '' }] }))}
+              onClick={() => setProfile((p) => ({ ...p, experience: [...p.experience, { title: '', company: '', period: '', description: '' }] }))}
               style={{ marginBottom: 0 }}
             >
               + Add experience
@@ -197,7 +211,10 @@ export const ProfileIntakePage: React.FC = () => {
             <SectionTitle>Projects</SectionTitle>
             {profile.projects.map((proj, i) => (
               <Card key={i}>
-                <Input value={proj.name} onChange={(e) => updateProject(i, { name: e.target.value })} placeholder="Project name" style={{ marginBottom: '8px' }} />
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                  <Input value={proj.name} onChange={(e) => updateProject(i, { name: e.target.value })} placeholder="Project name" />
+                  <Input value={proj.period} onChange={(e) => updateProject(i, { period: e.target.value })} placeholder="Period (optional)" />
+                </div>
                 <TextArea rows={2} value={proj.description} onChange={(e) => updateProject(i, { description: e.target.value })} placeholder="What it is / what you built" />
                 <Button
                   variant="ghost"
@@ -210,10 +227,38 @@ export const ProfileIntakePage: React.FC = () => {
             ))}
             <Button
               variant="ghost"
-              onClick={() => setProfile((p) => ({ ...p, projects: [...p.projects, { name: '', description: '' }] }))}
+              onClick={() => setProfile((p) => ({ ...p, projects: [...p.projects, { name: '', period: '', description: '' }] }))}
               style={{ marginBottom: 0 }}
             >
               + Add project
+            </Button>
+          </PanelCard>
+
+          <PanelCard>
+            <SectionTitle>Education</SectionTitle>
+            {profile.education.map((edu, i) => (
+              <Card key={i}>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                  <Input value={edu.institution} onChange={(e) => updateEducation(i, { institution: e.target.value })} placeholder="School / institution" />
+                  <Input value={edu.period} onChange={(e) => updateEducation(i, { period: e.target.value })} placeholder="Period (optional)" />
+                </div>
+                <Input value={edu.degree} onChange={(e) => updateEducation(i, { degree: e.target.value })} placeholder="Degree / program" style={{ marginBottom: '8px' }} />
+                <TextArea rows={2} value={edu.description} onChange={(e) => updateEducation(i, { description: e.target.value })} placeholder="Honors, relevant coursework, thesis (optional)" />
+                <Button
+                  variant="ghost"
+                  onClick={() => setProfile((p) => ({ ...p, education: p.education.filter((_, idx) => idx !== i) }))}
+                  style={{ marginTop: '8px', marginBottom: 0 }}
+                >
+                  Remove
+                </Button>
+              </Card>
+            ))}
+            <Button
+              variant="ghost"
+              onClick={() => setProfile((p) => ({ ...p, education: [...p.education, { institution: '', degree: '', period: '', description: '' }] }))}
+              style={{ marginBottom: 0 }}
+            >
+              + Add education
             </Button>
           </PanelCard>
 

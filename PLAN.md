@@ -159,6 +159,30 @@ could still go either way. Erring toward recall (keep weak matches) because
 catching paraphrases keyword matching misses is the entire reason semantic
 scoring exists. Revisit as real usage data accumulates.
 
+## Schema: education + period — ✅ implemented
+
+- **`education`** is a new top-level profile array: `[{institution, degree,
+  period, description}]` (`description` optional — honors/coursework/thesis).
+  It gets **no embedding and no matching** — same call as `skills`: everyone
+  lists all their education regardless of the job, and the matching value is
+  low. It passes through to the generation prompt in full (capped at 5,
+  un-scored, un-thresholded) and the generated CV gets an `education` array.
+- **`period`** was added to `experience`, `projects`, and `education`
+  (`"2020–2023"`, `"summer 2021"`, `"3 years"` — freeform, blank when
+  unknown). It is **deliberately not part of the embedded text**: dates aren't
+  semantic content, and editing only a date shouldn't force a re-embed.
+  `attach_embeddings` in `profile-service` takes the embed-relevant field
+  subset (`title`/`company`/`description`), and the full entry — `period`
+  included — is what gets stored. `entry_text_unchanged` compares only that
+  subset, so a period-only edit reuses the cached vector.
+- Touched every layer: `profile-service` (schema + storage), `intake-service`
+  (extraction prompt + normalization — now also pulls dates into `period`
+  when stated), `tailoring-service` (both scoring paths carry `period`
+  through, `build_prompt_context` adds `education`, the generation prompt's
+  output schema gains `education` and stops hard-coding `"Not specified"` for
+  `period`), and the frontend (`backend.ts` types + `ProfileIntakePage`
+  gained period inputs and a whole Education section).
+
 ## Generation — ✅ implemented
 
 - `POST /tailor-generate` accepts `{email, job_id}` (a saved job) or
@@ -425,9 +449,10 @@ one Claude call. Chosen shape:
   new approach.
 - 🚧 **Frontend wiring** — now the active piece of work (moved out of deferred).
   See "Frontend ↔ backend integration" above.
-- ⏸ **Profile schema gap.** `CVData` needs `title`/`phone`/`location`/`website`/
-  `linkedin`/`education`; `profile_data` doesn't carry those. `generated_cv`
-  leaves them blank rather than inventing them.
+- ⏸ **Profile schema gap (partially closed).** `education` and per-entry
+  `period` were added (see "Schema: education + period" below). Still missing
+  vs a full `CVData`: `phone`/`location`/`website`/`linkedin` and a top-level
+  `title` — `generated_cv` still leaves those to be filled in manually.
 
 ## Verification checklist (once deployed)
 
