@@ -468,6 +468,53 @@ one Claude call. Chosen shape:
 - Output is coerced to exactly the `PUT /profile` schema (empty entries
   dropped, trimmed, `company` left blank when no employer named).
 
+## Future improvements — 📝 noted, not started
+
+User-proposed, captured here for later. Not designed or scoped yet.
+
+1. **Profile updates should merge, not overwrite.** `PUT /profile` today is a
+   full replace — `normalize_profile_payload` takes exactly what's in the
+   request body and that becomes the whole item (see `save_profile` in
+   `profile-service`). `ProfileIntakePage` compounds this on the frontend
+   side too: it always starts from a blank form (`stage: 'paste'`), so
+   there's no way to see what's already saved before adding to it — a user
+   has to re-paste their entire background to add one new job. Fix likely
+   needs both ends: the frontend should load the existing saved profile into
+   the review form (pre-filled, editable) instead of starting blank, and/or
+   `profile-service` should support adding a single entry without requiring
+   the full profile in the request. Worth deciding whether "merge" means
+   append-only (never lose data unless explicitly removed) or still
+   full-replace-but-easier-to-edit (pre-filled form, same overwrite
+   semantics underneath) — those are different amounts of backend work.
+2. **Saved job list needs edit/delete.** Right now `job-service` only
+   supports create (`PUT` always makes a new UUID `job_id`, never updates)
+   and read — there's no `DELETE`, no update-in-place. This is the same gap
+   already flagged in "Open decisions" above (no dedup, no
+   delete/archive) — now with a concrete frontend (`JobDescriptionPage`)
+   that would use it. Needs a `DELETE /job-description` route at minimum;
+   an update route depends on whether editing a saved JD should re-embed it.
+3. **Reduce what's sent to the LLM — cost and security.** Two angles worth
+   separating: (a) *cost* — trimming prompt size (e.g. capping
+   `raw_job_description` length before it hits `/tailor-generate`, not just
+   `MAX_RAW_TEXT_CHARS` on the intake side) and avoiding redundant context
+   across calls; (b) *security* — right now full profile text (real name,
+   real employers, potentially other PII) goes into every Bedrock prompt.
+   Worth considering what's actually necessary to send vs. what's
+   convenient, and whether anything should be redacted/minimized before it
+   leaves the account boundary into the model call.
+4. **PDF export needs to be ATS-friendly.** Already tracked below under
+   "Deferred / explicitly out of scope" — `exportPDF.ts` currently rasterizes
+   via `html2canvas` into an image-in-a-PDF with no extractable text, which
+   defeats ATS parsing regardless of how good the generated content is.
+   Restating here because it's now specifically tied to the *generated* CV
+   from `/tailor-generate`, not just the manual builder.
+5. **Cover letter generation.** A new capability, not just a fix — likely a
+   new Bedrock-backed route (e.g. `POST /cover-letter-generate`) that takes
+   the same `{email, job_id}` shape as `/tailor-generate` and reuses the same
+   matched-profile-data + anti-hallucination prompt discipline established
+   there, producing a tailored cover letter instead of (or alongside) the CV
+   sections.
+
 ## Deferred / explicitly out of scope
 
 - ⏸ **ATS-safe export.** `exportPDF.ts` rasterizes the CV via `html2canvas` into a
