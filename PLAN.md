@@ -182,6 +182,17 @@ scoring exists. Revisit as real usage data accumulates.
   output schema gains `education` and stops hard-coding `"Not specified"` for
   `period`), and the frontend (`backend.ts` types + `ProfileIntakePage`
   gained period inputs and a whole Education section).
+- **AWS-verified** (see `TESTING.md` → "Schema: `education` + `period`"):
+  save/read round-trip; raw DynamoDB scan confirmed `education` items carry no
+  `embedding` key while `experience`/`projects` do; editing only `period`
+  left the stored embedding vector byte-identical (cache correctly reused);
+  `/tailor-generate` surfaced real `company`/`period` (no hallucinated
+  employer) and a correct `education` array in both `prompt_context` and
+  `generated_cv`; `/profile/parse` correctly extracted `period` and
+  `education` from free text; CloudWatch clean across all three services.
+  Verified by me against the real deployed stack — **awaiting the user's own
+  manual confirmation** before this counts as fully done per the `AGENTS.md`
+  testing policy.
 
 ## Generation — ✅ implemented
 
