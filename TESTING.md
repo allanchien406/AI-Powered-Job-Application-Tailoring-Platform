@@ -10,6 +10,57 @@ API base URL `https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com`.
 
 ---
 
+## `intake-service` (`POST /profile/parse`)
+
+Deployed as part of the frontend-integration work — turns free-form prose into
+the `profile-service` schema.
+
+**Test 1 — casual, rambling text** (a paragraph mentioning: software engineer
+at Delta Systems ~4 yrs Python/Go/APIs/Postgres; a year at a startup "Loopware"
+doing frontend React; a side app "TripSplit" in React Native; woodworking as an
+explicitly-stated hobby; "know Docker and AWS pretty well too"):
+
+- `full_name` → `"Morgan Reyes"` ✓
+- `skills` → `Python, Go, backend, APIs, Postgres, React, React Native, Docker, AWS` — reasonable, though "backend"/"APIs" are more concepts than tools
+- `projects` → `[TripSplit]` only ✓ — correctly a project, not experience
+- `experience` → `[Software Engineer @ Delta Systems, Frontend Developer @ Loopware]` — companies correct (both were named). "Frontend Developer" title was *inferred* from "doing frontend React work" — a mild synthesis, not stated verbatim; the human-review step is meant to catch this.
+- **Woodworking hobby correctly excluded** from both lists.
+
+**Test 2 — sparse, self-taught, no employer named** ("I taught myself web
+development… built a portfolio site and a weather dashboard… comfortable with
+JavaScript, HTML, CSS, starting to learn TypeScript"):
+
+- `full_name` → `""` ✓ (no name given, not guessed)
+- `skills` → `JavaScript, HTML, CSS, TypeScript` ✓
+- `projects` → `[Personal Portfolio Site, Weather Dashboard]` ✓
+- `experience` → `[]` ✓ — correctly empty; did **not** fabricate an employer or
+  misclassify the projects as jobs, even though there was no formal role to
+  extract.
+
+CloudWatch logs clean on both. **Status: works; `company` discipline held (no
+guessed employers); minor note on title inference.**
+
+**Test 3 — full frontend flow** (dev server + headless browser vs the real
+deployed backend): sign in with a fresh email → land on `/profile` → paste a
+paragraph ("data engineer at Streamline Corp… interned at a fintech company…
+built HabitDots in Svelte… play in a jazz band on weekends but that's just for
+fun") → click "Build my profile".
+
+- Parsed into the editable form: `full_name` "Riley Chen"; skills `[Python, ETL
+  pipelines, Postgres, SQL, Svelte]`; experience `[Data Engineer @ Streamline
+  Corp, Intern @ ""]` (internship company correctly blank — none was named);
+  project `[HabitDots]`. Jazz band hobby excluded.
+- Edited the name to "Riley Chen (edited)" → clicked **Save profile** → "Profile
+  saved ✓".
+- Direct `GET /profile` for that email confirmed the round-trip: `full_name`
+  = "Riley Chen (edited)" (the edit persisted), 2 experience, 1 project, skills
+  intact.
+- Zero browser console errors.
+
+**Status: profile intake flow wired end to end and verified against real AWS.**
+
+---
+
 ## `tailoring-service`
 
 ### Round 1 — initial deploy, connectivity

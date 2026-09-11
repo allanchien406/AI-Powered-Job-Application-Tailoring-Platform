@@ -159,6 +159,30 @@ could still go either way. Erring toward recall (keep weak matches) because
 catching paraphrases keyword matching misses is the entire reason semantic
 scoring exists. Revisit as real usage data accumulates.
 
+## Schema: education + period — ✅ implemented
+
+- **`education`** is a new top-level profile array: `[{institution, degree,
+  period, description}]` (`description` optional — honors/coursework/thesis).
+  It gets **no embedding and no matching** — same call as `skills`: everyone
+  lists all their education regardless of the job, and the matching value is
+  low. It passes through to the generation prompt in full (capped at 5,
+  un-scored, un-thresholded) and the generated CV gets an `education` array.
+- **`period`** was added to `experience`, `projects`, and `education`
+  (`"2020–2023"`, `"summer 2021"`, `"3 years"` — freeform, blank when
+  unknown). It is **deliberately not part of the embedded text**: dates aren't
+  semantic content, and editing only a date shouldn't force a re-embed.
+  `attach_embeddings` in `profile-service` takes the embed-relevant field
+  subset (`title`/`company`/`description`), and the full entry — `period`
+  included — is what gets stored. `entry_text_unchanged` compares only that
+  subset, so a period-only edit reuses the cached vector.
+- Touched every layer: `profile-service` (schema + storage), `intake-service`
+  (extraction prompt + normalization — now also pulls dates into `period`
+  when stated), `tailoring-service` (both scoring paths carry `period`
+  through, `build_prompt_context` adds `education`, the generation prompt's
+  output schema gains `education` and stops hard-coding `"Not specified"` for
+  `period`), and the frontend (`backend.ts` types + `ProfileIntakePage`
+  gained period inputs and a whole Education section).
+
 ## Generation — ✅ implemented
 
 - `POST /tailor-generate` accepts `{email, job_id}` (a saved job) or
@@ -368,12 +392,37 @@ CloudWatch logs clean on both `profile-service` and `tailoring-service`.
 
 ## Frontend ↔ backend integration — 🚧 in progress
 
-All three backend services are deployed and verified. The dashboard
-(`dashboard/`) still talks to the removed `cv-service` (`cvApi.ts` → `/cv`,
-`/cv/list`) and has no wiring to `profile-service`/`job-service`/`tailoring-service`.
+All backend services are deployed and verified. The old `dashboard/`
+pages (`CVBuilderPage`, `MyCVsPage`) still reference the removed `cv-service`
+(`cvApi.ts` → `/cv`, `/cv/list`) — stale, but not yet ripped out.
 
-**Free-text experience → the profile-service JSON schema — ✅ backend built,
-not yet AWS-verified.** The product direction (and the `FreeformDemoPage`
+**Profile intake flow — ✅ wired end to end.** New `dashboard/src/api/backend.ts`
+(real client for `profile-service`/`intake-service`; default URL points at the
+staged deployment, override with `VITE_API_URL`) + new `ProfileIntakePage.tsx`
+at `/profile`: sign in → paste your background as prose → `POST /profile/parse`
+→ the result renders as editable fields (name, skill tags, experience,
+projects, all add/remove-able) → correct anything → **Save** calls
+`PUT /profile`. `LoginPage` now routes here after sign-in instead of the old
+builder. Verified by driving the whole flow in a headless browser against the
+real deployed backend: a pasted paragraph parsed correctly (companies where
+named, blank where not, jazz-band hobby excluded), an edit to the name
+persisted, and a direct `GET /profile` confirmed the round-trip. Zero console
+errors. See `TESTING.md`.
+
+Still to do: the tailoring half — job description input → `/tailor-generate` →
+show the generated CV — and deciding what happens to the stale
+`CVBuilderPage`/`MyCVsPage`/`cvApi.ts`.
+
+**Free-text experience → the profile-service JSON schema — ✅ backend built and
+tested against real AWS.** Two runs (a rambling casual paragraph, and a sparse
+self-taught description): companies extracted correctly when named, left empty
+when not (no guessed employers), a stated hobby correctly excluded, and a
+description with no formal role correctly produced an empty `experience` list
+rather than fabricating one. One minor note: the model will lightly *infer* a
+job title from described work ("Frontend Developer" from "doing frontend React
+work") — a synthesis, not a fabrication of facts, and the frontend review step
+is there to catch it. See `TESTING.md`. The product direction (and the
+`FreeformDemoPage`
 prototype) is that a user pastes/types their background as prose, not fills in
 a structured form — but `PUT /profile` needs `{skills[], projects[{name,
 description}], experience[{title, company?, description}]}`. A new
@@ -390,8 +439,6 @@ one Claude call. Chosen shape:
 - Output is coerced to exactly the `PUT /profile` schema (empty entries
   dropped, trimmed, `company` left blank when no employer named).
 
-Still to do: deploy + real test, then wire the frontend.
-
 ## Deferred / explicitly out of scope
 
 - ⏸ **ATS-safe export.** `exportPDF.ts` rasterizes the CV via `html2canvas` into a
@@ -402,9 +449,10 @@ Still to do: deploy + real test, then wire the frontend.
   new approach.
 - 🚧 **Frontend wiring** — now the active piece of work (moved out of deferred).
   See "Frontend ↔ backend integration" above.
-- ⏸ **Profile schema gap.** `CVData` needs `title`/`phone`/`location`/`website`/
-  `linkedin`/`education`; `profile_data` doesn't carry those. `generated_cv`
-  leaves them blank rather than inventing them.
+- ⏸ **Profile schema gap (partially closed).** `education` and per-entry
+  `period` were added (see "Schema: education + period" below). Still missing
+  vs a full `CVData`: `phone`/`location`/`website`/`linkedin` and a top-level
+  `title` — `generated_cv` still leaves those to be filled in manually.
 
 ## Verification checklist (once deployed)
 

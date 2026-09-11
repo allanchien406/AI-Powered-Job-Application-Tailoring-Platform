@@ -13,7 +13,7 @@ export const LoginPage: React.FC = () => {
     e.preventDefault();
     if (!email.trim()) return;
     login(email.trim().toLowerCase());
-    navigate('/builder');
+    navigate('/profile');
   };
 
   return (
@@ -68,7 +68,7 @@ export const LoginPage: React.FC = () => {
           onClick={() => navigate('/demo')}
           style={{ width: '100%', padding: '10px', fontSize: '13px', marginBottom: 0 }}
         >
-          Try the new "paste your background" demo →
+          See the offline demo (fake data) →
         </Button>
       </form>
     </div>

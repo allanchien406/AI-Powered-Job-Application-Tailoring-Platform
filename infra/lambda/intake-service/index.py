@@ -16,17 +16,23 @@ SYSTEM_PROMPT = (
     "You are a CV intake assistant. The user gives you a free-form description of "
     "their background. Extract it into JSON with exactly this schema:\n"
     '{"full_name": string, "skills": [string], '
-    '"projects": [{"name": string, "description": string}], '
-    '"experience": [{"title": string, "company": string, "description": string}]}\n'
+    '"projects": [{"name": string, "period": string, "description": string}], '
+    '"experience": [{"title": string, "company": string, "period": string, "description": string}], '
+    '"education": [{"institution": string, "degree": string, "period": string, "description": string}]}\n'
     "Rules:\n"
     "- Only include information the user actually stated. Do not invent job titles, "
-    "company names, skills, dates, or achievements that are not in the text.\n"
-    "- If the user names an employer for a role, put it in \"company\". If they "
-    "don't, use an empty string \"\" — never guess a company name.\n"
+    "company names, institutions, degrees, skills, or achievements that are not in the text.\n"
+    "- If the user names an employer or institution, put it in \"company\"/\"institution\". "
+    "If they don't, use an empty string \"\" — never guess one.\n"
+    "- \"period\" is any dates or duration the user gave for that entry (e.g. "
+    "\"2020-2022\", \"3 years\", \"summer 2021\"). If they gave none, use \"\".\n"
     "- \"experience\" is paid or formal roles; \"projects\" is personal/side "
-    "projects or portfolio work. If it's genuinely unclear, prefer \"experience\".\n"
+    "projects or portfolio work; \"education\" is degrees, schools, courses, or "
+    "certifications. If a role vs project is genuinely unclear, prefer \"experience\".\n"
     "- \"skills\" is short technology/tool/competency terms the user explicitly "
     "mentioned — not full sentences.\n"
+    "- education \"description\" is optional (honors, relevant coursework, thesis) — "
+    "use \"\" if none.\n"
     "- If the user gave no name, use an empty string for \"full_name\".\n"
     "Respond with ONLY the JSON object, no preamble or explanation."
 )
@@ -92,8 +98,9 @@ def normalize_parsed(parsed):
     return {
         "full_name": full_name.strip() if isinstance(full_name, str) else "",
         "skills": normalize_string_list(parsed.get("skills")),
-        "projects": normalize_entry_list(parsed.get("projects"), ["name", "description"]),
-        "experience": normalize_entry_list(parsed.get("experience"), ["title", "company", "description"]),
+        "projects": normalize_entry_list(parsed.get("projects"), ["name", "period", "description"]),
+        "experience": normalize_entry_list(parsed.get("experience"), ["title", "company", "period", "description"]),
+        "education": normalize_entry_list(parsed.get("education"), ["institution", "degree", "period", "description"]),
     }
 
 
