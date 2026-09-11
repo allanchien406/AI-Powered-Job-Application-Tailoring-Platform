@@ -279,9 +279,14 @@ export const ProfileIntakePage: React.FC = () => {
           <div style={{ fontSize: '12px', color: '#6b665c', marginBottom: '12px' }}>
             Saved under {email}. You can paste more text to rebuild it, or move on to tailoring a CV.
           </div>
-          <Button onClick={() => setStage('paste')} style={{ marginBottom: 0 }}>
-            Edit again
-          </Button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <Button onClick={() => navigate('/jobs')} style={{ marginBottom: 0 }}>
+              Add a job to tailor for →
+            </Button>
+            <Button variant="ghost" onClick={() => setStage('paste')} style={{ marginBottom: 0 }}>
+              Edit again
+            </Button>
+          </div>
         </PanelCard>
       )}
     </Shell>

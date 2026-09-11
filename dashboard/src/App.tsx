@@ -5,6 +5,7 @@ import { CVBuilderPage } from './pages/CVBuilderPage';
 import { MyCVsPage } from './pages/MyCVsPage';
 import { FreeformDemoPage } from './pages/FreeformDemoPage';
 import { ProfileIntakePage } from './pages/ProfileIntakePage';
+import { JobDescriptionPage } from './pages/JobDescriptionPage';
 
 export const App: React.FC = () => {
   return (
@@ -12,6 +13,7 @@ export const App: React.FC = () => {
       <Routes>
         <Route path="/" element={<LoginPage />} />
         <Route path="/profile" element={<ProfileIntakePage />} />
+        <Route path="/jobs" element={<JobDescriptionPage />} />
         <Route path="/builder" element={<CVBuilderPage />} />
         <Route path="/my-cvs" element={<MyCVsPage />} />
         <Route path="/demo" element={<FreeformDemoPage />} />

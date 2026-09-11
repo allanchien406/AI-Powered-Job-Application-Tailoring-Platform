@@ -190,9 +190,8 @@ scoring exists. Revisit as real usage data accumulates.
   employer) and a correct `education` array in both `prompt_context` and
   `generated_cv`; `/profile/parse` correctly extracted `period` and
   `education` from free text; CloudWatch clean across all three services.
-  Verified by me against the real deployed stack — **awaiting the user's own
-  manual confirmation** before this counts as fully done per the `AGENTS.md`
-  testing policy.
+  Verified by me against the real deployed stack, and confirmed by the user's
+  own manual pass — **done**.
 
 ## Generation — ✅ implemented
 
@@ -420,9 +419,28 @@ named, blank where not, jazz-band hobby excluded), an edit to the name
 persisted, and a direct `GET /profile` confirmed the round-trip. Zero console
 errors. See `TESTING.md`.
 
-Still to do: the tailoring half — job description input → `/tailor-generate` →
-show the generated CV — and deciding what happens to the stale
-`CVBuilderPage`/`MyCVsPage`/`cvApi.ts`.
+**Job description + tailoring flow — ✅ wired end to end.** `backend.ts`
+extended with `saveJobDescription`/`listJobDescriptions`/`generateTailoredCV`
+(and the `JobDescriptionInput`/`StoredJobDescription`/`GeneratedCV`/
+`PromptContext` types). New `JobDescriptionPage.tsx` at `/jobs`: paste
+company/title/description → `PUT /job-description` → appears in a saved-jobs
+list (`GET /job-description/list`) → **Tailor CV** on any saved job calls
+`POST /tailor-generate` and renders the generated title/summary/experience/
+education inline on that job's card. `ProfileIntakePage`'s "saved" screen now
+links forward to `/jobs`, completing the loop from the login page. Verified
+end to end in a headless browser against the real deployed backend: signed
+in → parsed+saved a profile (Nimbus Software experience, Budget Tracker
+project, State University education) → saved a Vertex Analytics job posting
+→ generated a CV that used the *real* profile data (Nimbus Software, correct
+period, State University) rather than fabricating an employer from the target
+company name → reloaded the page and confirmed the saved job list persists
+via `GET /job-description/list`. Zero console errors, zero CloudWatch errors
+across all four Lambdas. See `TESTING.md`.
+
+Still to do: deciding what happens to the stale
+`CVBuilderPage`/`MyCVsPage`/`cvApi.ts`, and (smaller) `/tailor-preview`
+(the free keyword-only route) isn't wired into the frontend anywhere yet —
+only the paid `/tailor-generate` path is.
 
 **Free-text experience → the profile-service JSON schema — ✅ backend built and
 tested against real AWS.** Two runs (a rambling casual paragraph, and a sparse

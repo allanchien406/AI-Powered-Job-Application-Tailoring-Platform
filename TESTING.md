@@ -10,6 +10,43 @@ API base URL `https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com`.
 
 ---
 
+## Job description frontend (`JobDescriptionPage.tsx` → `job-service` + `tailoring-service`)
+
+Full headless-browser run against `npm run dev` (localhost:5173) talking to
+the real deployed backend. Test email `jd.frontend.test@example.com`, all
+data deleted from DynamoDB after.
+
+**Flow driven:**
+1. Sign in (fresh email) → landed on `/profile`.
+2. Pasted a background paragraph (Nimbus Software 2021–2024, Budget Tracker
+   project 2023, State University CS degree 2017–2021) → **Build my profile**
+   → parsed correctly → **Save profile** → "Profile saved ✓".
+3. Clicked the new **Add a job to tailor for →** link on the saved screen →
+   landed on `/jobs`.
+4. Filled in company "Vertex Analytics", title "Backend Software Engineer",
+   and a Python/AWS job description → **Save job** → appeared immediately in
+   the saved-jobs list (optimistic add from the `PUT` response, no extra
+   fetch needed).
+5. Clicked **Tailor CV** on that job → `POST /tailor-generate` → generated
+   result rendered inline on the job's card:
+   > "Backend Software Engineer" — "Software engineer with experience
+   > building Python services on AWS..." — Experience: "Software Engineer ·
+   > Nimbus Software · 2021-2024" — Education: "Computer Science · State
+   > University · 2017-2021"
+   - **Real profile data used, not the target company** — "Nimbus Software"
+     appears as the employer, not "Vertex Analytics." Confirms the
+     anti-hallucination fix still holds through the new frontend path.
+6. Reloaded the page → saved job list still showed "Backend Software
+   Engineer" (`GET /job-description/list` round-trip confirmed).
+
+**Console errors: none.** **CloudWatch (profile-service, tailoring-service,
+intake-service, job-service, 10-minute window): zero error events.**
+
+**Status: job description + tailoring frontend flow verified end-to-end
+against real AWS.**
+
+---
+
 ## Schema: `education` + `period` (all three services)
 
 Deployed via `test/deploy-profile-service` (merged from `develop` @ `e2f98d8`).
