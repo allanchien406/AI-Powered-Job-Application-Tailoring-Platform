@@ -13,6 +13,12 @@ export interface EducationEntry {
   period: string;
 }
 
+export interface JobRef {
+  company_name: string;
+  job_title: string;
+  raw_description: string;
+}
+
 export interface CVData {
   name: string;
   title: string;

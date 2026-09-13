@@ -98,33 +98,25 @@ export const FreeformDemoPage: React.FC = () => {
     setTimeout(() => setStage('result'), 1400);
   };
 
+  const cardClass = 'rounded-2xl border border-sand bg-white p-7 shadow-card';
+
   return (
-    <div style={{ minHeight: '100vh', background: '#f0ede6', padding: '40px 20px' }}>
-      <div style={{ maxWidth: '640px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px' }}>
-          <h1 style={{ fontFamily: "'DM Serif Display', serif", fontSize: '28px', margin: 0, color: '#1a1a18' }}>
-            Tell us about yourself
-          </h1>
-          <Button variant="ghost" onClick={() => navigate('/')} style={{ marginBottom: 0 }}>
+    <div className="min-h-screen bg-paper px-5 py-10">
+      <div className="mx-auto max-w-[640px]">
+        <div className="mb-2 flex items-baseline justify-between">
+          <h1 className="m-0 font-display text-[28px] text-ink">Tell us about yourself</h1>
+          <Button variant="ghost" onClick={() => navigate('/')}>
             Exit demo
           </Button>
         </div>
-        <p style={{ fontSize: '12px', color: '#9e9a91', marginBottom: '24px' }}>
+        <p className="mb-6 text-xs text-ink-muted">
           Demo — every result below is fake, simulated data. Nothing here calls a real backend yet.
         </p>
 
         {(stage === 'intake' || stage === 'extracting') && (
-          <div
-            style={{
-              background: '#fff',
-              padding: '28px',
-              borderRadius: '16px',
-              border: '1px solid #e6e1d7',
-              boxShadow: '0 8px 30px rgba(30, 22, 10, 0.08)',
-            }}
-          >
+          <div className={cardClass}>
             <SectionTitle>Your background</SectionTitle>
-            <p style={{ fontSize: '12px', color: '#6b665c', marginTop: '-4px', marginBottom: '10px' }}>
+            <p className="-mt-1 mb-2.5 text-xs text-ink-soft">
               Paste or type your experience however it comes out — work history, projects, skills, whatever
               you've got. No forms, no required fields.
             </p>
@@ -138,7 +130,7 @@ export const FreeformDemoPage: React.FC = () => {
             <Button
               onClick={handleExtract}
               disabled={stage === 'extracting'}
-              style={{ marginTop: '14px', marginBottom: 0 }}
+              className="mt-3.5"
             >
               {stage === 'extracting' ? 'Reading through it…' : 'Build my profile'}
             </Button>
@@ -148,12 +140,12 @@ export const FreeformDemoPage: React.FC = () => {
         {(stage === 'profile' || stage === 'job' || stage === 'generating' || stage === 'result') && (
           <Card>
             <SectionTitle>Here's what we found</SectionTitle>
-            <p style={{ fontSize: '11px', color: '#9e9a91', marginTop: '-4px', marginBottom: '12px' }}>
+            <p className="-mt-1 mb-3 text-[11px] text-ink-muted">
               Simulated extraction — a real pass would read this out of what you typed above.
             </p>
 
-            <div style={{ fontSize: '12px', fontWeight: 500, marginBottom: '6px' }}>Skills</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '14px' }}>
+            <div className="mb-1.5 text-xs font-medium">Skills</div>
+            <div className="mb-3.5 flex flex-wrap gap-2">
               {skills.map((skill) => (
                 <Tag key={skill} onRemove={() => setSkills(skills.filter((s) => s !== skill))}>
                   {skill}
@@ -161,24 +153,24 @@ export const FreeformDemoPage: React.FC = () => {
               ))}
             </div>
 
-            <div style={{ fontSize: '12px', fontWeight: 500, marginBottom: '6px' }}>Projects</div>
+            <div className="mb-1.5 text-xs font-medium">Projects</div>
             {FAKE_PROFILE.projects.map((project) => (
-              <div key={project.name} style={{ marginBottom: '10px' }}>
-                <div style={{ fontSize: '12.5px', fontWeight: 500 }}>{project.name}</div>
-                <div style={{ fontSize: '12px', color: '#5a5751' }}>{project.description}</div>
+              <div key={project.name} className="mb-2.5">
+                <div className="text-[12.5px] font-medium">{project.name}</div>
+                <div className="text-xs text-[#5a5751]">{project.description}</div>
               </div>
             ))}
 
-            <div style={{ fontSize: '12px', fontWeight: 500, margin: '10px 0 6px' }}>Experience</div>
+            <div className="mb-1.5 text-xs font-medium">Experience</div>
             {FAKE_PROFILE.experience.map((exp) => (
-              <div key={exp.title} style={{ marginBottom: '10px' }}>
-                <div style={{ fontSize: '12.5px', fontWeight: 500 }}>{exp.title}</div>
-                <div style={{ fontSize: '12px', color: '#5a5751' }}>{exp.description}</div>
+              <div key={exp.title} className="mb-2.5">
+                <div className="text-[12.5px] font-medium">{exp.title}</div>
+                <div className="text-xs text-[#5a5751]">{exp.description}</div>
               </div>
             ))}
 
             {stage === 'profile' && (
-              <Button onClick={() => setStage('job')} style={{ marginTop: '4px', marginBottom: 0 }}>
+              <Button onClick={() => setStage('job')} className="mt-1">
                 Looks right — pick a job to tailor for
               </Button>
             )}
@@ -186,18 +178,9 @@ export const FreeformDemoPage: React.FC = () => {
         )}
 
         {(stage === 'job' || stage === 'generating' || stage === 'result') && (
-          <div
-            style={{
-              background: '#fff',
-              padding: '28px',
-              borderRadius: '16px',
-              border: '1px solid #e6e1d7',
-              boxShadow: '0 8px 30px rgba(30, 22, 10, 0.08)',
-              marginTop: '16px',
-            }}
-          >
+          <div className={`${cardClass} mt-4`}>
             <SectionTitle>Target job</SectionTitle>
-            <p style={{ fontSize: '12px', color: '#6b665c', marginTop: '-4px', marginBottom: '10px' }}>
+            <p className="-mt-1 mb-2.5 text-xs text-ink-soft">
               Paste the job description — no need to save it first, just paste and go.
             </p>
             <TextArea
@@ -208,48 +191,37 @@ export const FreeformDemoPage: React.FC = () => {
               disabled={stage !== 'job'}
             />
             {stage === 'job' && (
-              <Button onClick={handleGenerate} style={{ marginTop: '14px', marginBottom: 0 }}>
+              <Button onClick={handleGenerate} className="mt-3.5">
                 Generate tailored CV
               </Button>
             )}
             {stage === 'generating' && (
-              <div style={{ marginTop: '14px', fontSize: '12px', color: '#9e9a91' }}>Tailoring your CV…</div>
+              <div className="mt-3.5 text-xs text-ink-muted">Tailoring your CV…</div>
             )}
           </div>
         )}
 
         {stage === 'result' && (
-          <div
-            style={{
-              background: '#fff',
-              padding: '28px',
-              borderRadius: '16px',
-              border: '1px solid #e6e1d7',
-              boxShadow: '0 8px 30px rgba(30, 22, 10, 0.08)',
-              marginTop: '16px',
-            }}
-          >
+          <div className={`${cardClass} mt-4`}>
             <SectionTitle>Tailored for this job</SectionTitle>
-            <p style={{ fontSize: '11px', color: '#9e9a91', marginTop: '-4px', marginBottom: '14px' }}>
+            <p className="-mt-1 mb-3.5 text-[11px] text-ink-muted">
               Simulated generation — shaped like the real tailoring-service response
               (title / summary / experience) from PLAN.md.
             </p>
-            <div style={{ fontSize: '16px', fontFamily: "'DM Serif Display', serif", marginBottom: '10px' }}>
-              {FAKE_GENERATED_CV.title}
-            </div>
-            <p style={{ fontSize: '12.5px', lineHeight: 1.7, color: '#3a3835', marginBottom: '16px' }}>
+            <div className="mb-2.5 font-display text-base text-ink">{FAKE_GENERATED_CV.title}</div>
+            <p className="mb-4 text-[12.5px] leading-[1.7] text-[#3a3835]">
               {FAKE_GENERATED_CV.summary}
             </p>
-            <div style={{ fontSize: '12px', fontWeight: 500, marginBottom: '8px' }}>Experience</div>
+            <div className="mb-2 text-xs font-medium">Experience</div>
             {FAKE_GENERATED_CV.experience.map((exp) => (
-              <div key={exp.role} style={{ marginBottom: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <div style={{ fontSize: '12.5px', fontWeight: 500 }}>
+              <div key={exp.role} className="mb-3">
+                <div className="flex justify-between">
+                  <div className="text-[12.5px] font-medium">
                     {exp.role} · {exp.company}
                   </div>
-                  <div style={{ fontSize: '11px', color: '#9e9a91' }}>{exp.period}</div>
+                  <div className="text-[11px] text-ink-muted">{exp.period}</div>
                 </div>
-                <div style={{ fontSize: '12px', color: '#5a5751', marginTop: '3px' }}>{exp.description}</div>
+                <div className="mt-0.5 text-xs text-[#5a5751]">{exp.description}</div>
               </div>
             ))}
           </div>

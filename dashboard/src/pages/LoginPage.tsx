@@ -17,36 +17,16 @@ export const LoginPage: React.FC = () => {
   };
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: '#f0ede6',
-      }}
-    >
+    <div className="flex min-h-screen items-center justify-center bg-paper">
       <form
         onSubmit={handleSubmit}
-        style={{
-          background: '#fff',
-          padding: '40px',
-          borderRadius: '16px',
-          border: '1px solid #e6e1d7',
-          boxShadow: '0 8px 30px rgba(30, 22, 10, 0.08)',
-          width: '360px',
-        }}
+        className="w-[360px] rounded-2xl border border-sand bg-white p-10 shadow-card"
       >
-        <h1
-          style={{
-            fontFamily: "'DM Serif Display', serif",
-            fontSize: '28px',
-            margin: '0 0 24px',
-            color: '#1a1a18',
-          }}
-        >
-          CV Builder
-        </h1>
+        <h1 className="mb-2 mt-0 font-display text-[28px] text-ink">CV Tailor</h1>
+        <p className="mb-6 text-xs leading-normal text-ink-soft">
+          Paste your background once, save the jobs you're applying for, and get a CV tailored to
+          each one.
+        </p>
         <Field label="Email address">
           <Input
             type="email"
@@ -56,17 +36,14 @@ export const LoginPage: React.FC = () => {
             required
           />
         </Field>
-        <Button
-          type="submit"
-          style={{ width: '100%', padding: '10px', fontSize: '14px', marginBottom: '12px' }}
-        >
+        <Button type="submit" className="mb-3 w-full px-2.5 py-2.5 text-sm">
           Get Started
         </Button>
         <Button
           type="button"
           variant="ghost"
           onClick={() => navigate('/demo')}
-          style={{ width: '100%', padding: '10px', fontSize: '13px', marginBottom: 0 }}
+          className="w-full px-2.5 py-2.5 text-[13px]"
         >
           See the offline demo (fake data) →
         </Button>

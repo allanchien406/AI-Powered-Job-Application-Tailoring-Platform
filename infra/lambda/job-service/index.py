@@ -57,17 +57,14 @@ def strip_embedding(job_description):
     return {k: v for k, v in job_description.items() if k != "embedding"}
 
 
-def save_job_description(table, email, company_name, job_title, raw_description):
-    job_id = str(uuid.uuid4())
+def write_job_description(table, email, job_id, company_name, job_title, raw_description, created_at):
     warnings = []
 
     try:
         embedding = embed_text(raw_description)
     except Exception as exc:
         # Broad on purpose: whatever went wrong with Bedrock, the job
-        # description itself must still get saved. Unlike profile-service,
-        # there's no "next save" to retry on here (job descriptions are
-        # never updated in place, per API.md) - the actual fallback is
+        # description itself must still get saved. The fallback is
         # tailoring-service embedding this on the fly at match time when it
         # finds no cached vector.
         print(f"embed_text failed for job_id {job_id!r}: {exc}")
@@ -81,10 +78,44 @@ def save_job_description(table, email, company_name, job_title, raw_description)
         "job_title": job_title,
         "raw_description": raw_description,
         "embedding": embedding,
-        "created_at": now_iso(),
+        "created_at": created_at,
     }
     table.put_item(Item=item)
     return item, warnings
+
+
+def save_job_description(table, email, company_name, job_title, raw_description):
+    job_id = str(uuid.uuid4())
+    return write_job_description(
+        table, email, job_id, company_name, job_title, raw_description, now_iso()
+    )
+
+
+def update_job_description(table, email, job_id, company_name, job_title, raw_description):
+    existing = get_job_description_by_id(table, email, job_id)
+    if not existing:
+        return None
+
+    if raw_description == existing.get("raw_description"):
+        # Description text unchanged — reuse the cached embedding rather than
+        # burning another Bedrock call, matching the profile-service pattern
+        # for edits that don't touch embed-relevant text (see PLAN.md).
+        item = dict(existing)
+        item["company_name"] = company_name
+        item["job_title"] = job_title
+        item["raw_description"] = raw_description
+        table.put_item(Item=item)
+        return item, []
+
+    return write_job_description(
+        table,
+        email,
+        job_id,
+        company_name,
+        job_title,
+        raw_description,
+        existing.get("created_at") or now_iso(),
+    )
 
 
 def get_job_description_by_id(table, email, job_id):
@@ -136,6 +167,7 @@ def handler(event, context):
             company_name = (data.get("company_name") or "").strip()
             job_title = (data.get("job_title") or "").strip()
             raw_description = (data.get("raw_description") or "").strip()
+            job_id = (data.get("job_id") or "").strip() or None
 
             if not email:
                 return response(400, {"error": "email is required"})
@@ -146,10 +178,22 @@ def handler(event, context):
             if not raw_description:
                 return response(400, {"error": "raw_description is required"})
 
-            item, embedding_warnings = save_job_description(table, email, company_name, job_title, raw_description)
+            if job_id is not None:
+                updated = update_job_description(
+                    table, email, job_id, company_name, job_title, raw_description
+                )
+                if updated is None:
+                    return response(404, {"error": "Job description not found"})
+                item, embedding_warnings = updated
+                message = "Job description updated successfully"
+            else:
+                item, embedding_warnings = save_job_description(
+                    table, email, company_name, job_title, raw_description
+                )
+                message = "Job description saved successfully"
 
             result = {
-                "message": "Job description saved successfully",
+                "message": message,
                 "job_id": item["job_id"],
                 "email": email,
                 "company_name": company_name,

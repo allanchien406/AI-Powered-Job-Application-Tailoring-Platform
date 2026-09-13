@@ -106,6 +106,23 @@ export async function saveJobDescription(
   return { ...job, email: data.email, job_id: data.job_id, created_at: new Date().toISOString() };
 }
 
+/** Update an existing job description in place. `job_id` is preserved, so any
+ * previously tailored result still points at the same job. */
+export async function updateJobDescription(
+  email: string,
+  jobId: string,
+  job: JobDescriptionInput,
+): Promise<StoredJobDescription> {
+  const data = await request<{ message: string; job_id: string; email: string; company_name: string; job_title: string }>(
+    '/job-description',
+    {
+      method: 'PUT',
+      body: JSON.stringify({ email, job_id: jobId, ...job }),
+    },
+  );
+  return { ...job, email: data.email, job_id: data.job_id, created_at: new Date().toISOString() };
+}
+
 /** List every job description a user has saved, most recent first. */
 export async function listJobDescriptions(email: string): Promise<StoredJobDescription[]> {
   const data = await request<{ job_descriptions: StoredJobDescription[] }>(

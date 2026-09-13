@@ -325,12 +325,11 @@ scoring exists. Revisit as real usage data accumulates.
 
 ## Open decisions
 
-- ❓ **No dedup, no delete/archive on `job-service`.** Raised during
-  `job-service`'s original review (every `PUT /job-description` makes a
-  fresh UUID even for an identical resubmission; there's no `DELETE` or
-  soft-delete like `cv-service` used to have). Now tracked with full context
-  under **Future improvements #2**, since `JobDescriptionPage` gives it a
-  concrete frontend to design around.
+- ❓ **No dedup, no delete/archive on `job-service`.** Update-in-place is now
+  supported (an optional `job_id` on `PUT /job-description` edits the existing
+  entry — see **Future improvements #2**), but every `PUT` without a `job_id`
+  still makes a fresh UUID even for an identical resubmission, and there's no
+  `DELETE` or soft-delete like `cv-service` used to have.
 
 ## Known bugs, pending fix
 
@@ -480,13 +479,13 @@ User-proposed, captured here for later. Not designed or scoped yet.
    append-only (never lose data unless explicitly removed) or still
    full-replace-but-easier-to-edit (pre-filled form, same overwrite
    semantics underneath) — those are different amounts of backend work.
-2. **Saved job list needs edit/delete.** Right now `job-service` only
-   supports create (`PUT` always makes a new UUID `job_id`, never updates)
-   and read — there's no `DELETE`, no update-in-place. This is the same gap
-   already flagged in "Open decisions" above (no dedup, no
-   delete/archive) — now with a concrete frontend (`JobDescriptionPage`)
-   that would use it. Needs a `DELETE /job-description` route at minimum;
-   an update route depends on whether editing a saved JD should re-embed it.
+2. **Saved job list needs delete.** Edit is now built: `PUT /job-description`
+   accepts an optional `job_id` and updates the existing entry in place
+   (re-embedding `raw_description`'s vector only when the description text
+   actually changes, so a title/company-only edit doesn't burn a Bedrock call —
+   mirrored on the dashboard by `Edit` → `Save changes` on any saved job).
+   What's still missing is `DELETE /job-description` — there's no way to remove
+   a saved job from the list yet.
 3. **Reduce what's sent to the LLM — cost and security.** Two angles worth
    separating: (a) *cost* — trimming prompt size (e.g. capping
    `raw_job_description` length before it hits `/tailor-generate`, not just

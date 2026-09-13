@@ -90,24 +90,26 @@ Fetch one saved job description.
 
 ### `PUT /job-description`
 
-Save a new job description. Always creates a new item (no update-in-place —
-`job_id` is generated fresh every call, so there's no dedup against an
-existing entry for the same job).
+Create or update a job description.
 
 - **Body:** `{email, company_name, job_title, raw_description}` — all required,
   all trimmed of whitespace before validation (a whitespace-only value is
-  rejected, not silently stored)
-- **200:** `{message, job_id, email, company_name, job_title}` — `job_id` is a
-  generated UUID string, `email` is lowercased+trimmed before storage — plus
-  `embedding_warnings: string[]` **only if** embedding `raw_description` failed
-  (save still succeeds either way, mirroring `profile-service`'s
-  graceful-degradation pattern)
-- **400:** any required field missing/blank
+  rejected, not silently stored). **Optional `job_id`:** when provided, the
+  existing job is updated in place (same `email` + `job_id` key); when absent,
+  a new job is created with a fresh UUID.
+- **200:** `{message, job_id, email, company_name, job_title}` — `email` is
+  lowercased+trimmed before storage; `job_id` is the new UUID (on create) or
+  the provided ID (on update) — plus `embedding_warnings: string[]` **only if**
+  embedding `raw_description` failed (save/update still succeeds either way,
+  mirroring `profile-service`'s graceful-degradation pattern)
+- **400:** any required field missing/blank · **404 (update only):** `job_id`
+  not found for that `email`
 - **Behavior worth knowing:** `raw_description`'s embedding is computed once
-  here, at save time, and cached on the item for `tailoring-service` to reuse.
-  If that embedding call fails, there's no "next save" to retry it on (unlike
-  `profile-service`'s entries) — `tailoring-service` falls back to embedding it
-  inline at match time instead.
+  here, at save/update time, and cached on the item for `tailoring-service` to
+  reuse. On update, if `raw_description` hasn't changed, the existing embedding
+  is preserved (no Bedrock call); if the description text has changed, a fresh
+  embedding is computed. If that embedding call fails, `tailoring-service`
+  falls back to embedding it inline at match time instead.
 
 ### `GET /job-description/list`
 
