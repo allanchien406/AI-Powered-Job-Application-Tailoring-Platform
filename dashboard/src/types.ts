@@ -27,17 +27,3 @@ export interface CVData {
   skills: string[];
   accentColor: string;
 }
-
-export type TemplateId = 'modern' | 'classic' | 'minimal';
-
-export interface Template {
-  id: TemplateId;
-  name: string;
-  description: string;
-}
-
-export interface Note {
-  id: string;
-  text: string;
-  createdAt: string;
-}

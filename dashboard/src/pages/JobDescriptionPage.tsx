@@ -6,18 +6,29 @@ import {
   saveJobDescription,
   listJobDescriptions,
   generateTailoredCV,
+  tailorPreview,
+  getProfile,
   StoredJobDescription,
   GeneratedCV,
   PromptContext,
+  TailorPreviewResult,
 } from '../api/backend';
 
 type ListState = 'loading' | 'loaded' | 'error';
 type SaveState = 'idle' | 'saving' | 'error';
 type GenerateState = { jobId: string; status: 'generating' } | { jobId: string; status: 'error'; message: string } | null;
+type PreviewState = {
+  jobId: string;
+  status: 'loading' | 'loaded' | 'error';
+  result?: TailorPreviewResult;
+  message?: string;
+} | null;
+type OpenState = { jobId: string; status: 'opening' | 'error'; message?: string } | null;
 
 export const JobDescriptionPage: React.FC = () => {
   const navigate = useNavigate();
   const email = useCVStore((state) => state.email);
+  const loadGeneratedCV = useCVStore((state) => state.loadGeneratedCV);
 
   const [jobs, setJobs] = useState<StoredJobDescription[]>([]);
   const [listState, setListState] = useState<ListState>('loading');
@@ -29,6 +40,8 @@ export const JobDescriptionPage: React.FC = () => {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const [generateState, setGenerateState] = useState<GenerateState>(null);
+  const [previewState, setPreviewState] = useState<PreviewState>(null);
+  const [openState, setOpenState] = useState<OpenState>(null);
   const [result, setResult] = useState<{
     jobId: string;
     promptContext: PromptContext;
@@ -91,6 +104,42 @@ export const JobDescriptionPage: React.FC = () => {
         jobId: job.job_id,
         status: 'error',
         message: e instanceof Error ? e.message : 'Something went wrong generating a tailored CV.',
+      });
+    }
+  };
+
+  const handlePreview = async (job: StoredJobDescription) => {
+    setPreviewState({ jobId: job.job_id, status: 'loading' });
+    try {
+      const result = await tailorPreview(email, job.job_id);
+      setPreviewState({ jobId: job.job_id, status: 'loaded', result });
+    } catch (e) {
+      setPreviewState({
+        jobId: job.job_id,
+        status: 'error',
+        message: e instanceof Error ? e.message : 'Something went wrong previewing matches.',
+      });
+    }
+  };
+
+  const handleOpenInEditor = async (
+    job: StoredJobDescription,
+    generatedCv: GeneratedCV,
+  ) => {
+    setOpenState({ jobId: job.job_id, status: 'opening' });
+    try {
+      const profile = await getProfile(email);
+      loadGeneratedCV(
+        profile,
+        generatedCv,
+        { companyName: job.company_name, jobTitle: job.job_title },
+      );
+      navigate('/builder');
+    } catch (e) {
+      setOpenState({
+        jobId: job.job_id,
+        status: 'error',
+        message: e instanceof Error ? e.message : 'Something went wrong loading your profile.',
       });
     }
   };
@@ -163,25 +212,113 @@ export const JobDescriptionPage: React.FC = () => {
                 <div style={{ fontSize: '13px', fontWeight: 500 }}>{job.job_title}</div>
                 <div style={{ fontSize: '12px', color: '#6b665c' }}>{job.company_name}</div>
               </div>
-              <Button
-                variant="ghost"
-                onClick={() => handleGenerate(job)}
-                disabled={generateState?.jobId === job.job_id && generateState.status === 'generating'}
-                style={{ marginBottom: 0, whiteSpace: 'nowrap' }}
-              >
-                {generateState?.jobId === job.job_id && generateState.status === 'generating'
-                  ? 'Tailoring…'
-                  : 'Tailor CV'}
-              </Button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <Button
+                  variant="ghost"
+                  onClick={() => handlePreview(job)}
+                  disabled={previewState?.jobId === job.job_id && previewState.status === 'loading'}
+                  style={{ marginBottom: 0, whiteSpace: 'nowrap' }}
+                >
+                  {previewState?.jobId === job.job_id && previewState.status === 'loading'
+                    ? 'Matching…'
+                    : 'Preview matches'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => handleGenerate(job)}
+                  disabled={generateState?.jobId === job.job_id && generateState.status === 'generating'}
+                  style={{ marginBottom: 0, whiteSpace: 'nowrap' }}
+                >
+                  {generateState?.jobId === job.job_id && generateState.status === 'generating'
+                    ? 'Tailoring…'
+                    : 'Tailor CV'}
+                </Button>
+              </div>
             </div>
+            {previewState?.jobId === job.job_id && previewState.status === 'error' && (
+              <div style={{ fontSize: '12px', color: '#8a3a2f', marginTop: '8px' }}>
+                {previewState.message}
+              </div>
+            )}
+            {previewState?.jobId === job.job_id && previewState.result && (
+              <PreviewResult result={previewState.result} />
+            )}
             {generateState?.jobId === job.job_id && generateState.status === 'error' && (
               <div style={{ fontSize: '12px', color: '#8a3a2f', marginTop: '8px' }}>{generateState.message}</div>
             )}
-            {result && result.jobId === job.job_id && <GeneratedResult result={result} />}
+            {openState?.jobId === job.job_id && openState.status === 'error' && (
+              <div style={{ fontSize: '12px', color: '#8a3a2f', marginTop: '8px' }}>{openState.message}</div>
+            )}
+            {result && result.jobId === job.job_id && (
+              <>
+                <GeneratedResult result={result} />
+                <div style={{ textAlign: 'right' }}>
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleOpenInEditor(job, result.generatedCv)}
+                    disabled={openState?.jobId === job.job_id && openState.status === 'opening'}
+                    style={{ marginBottom: 0 }}
+                  >
+                    {openState?.jobId === job.job_id && openState.status === 'opening'
+                      ? 'Opening…'
+                      : 'Open in editor →'}
+                  </Button>
+                </div>
+              </>
+            )}
           </Card>
         ))}
       </PanelCard>
     </Shell>
+  );
+};
+
+const PreviewResult: React.FC<{ result: TailorPreviewResult }> = ({ result }) => {
+  const matches: Array<{ kind: string; name: string; matched: string[] }> = [
+    ...result.matched_projects.map((p) => ({ kind: 'Project', name: p.name ?? '', matched: p.matched_terms })),
+    ...result.matched_experiences.map((e) => ({ kind: 'Experience', name: e.title ?? '', matched: e.matched_terms })),
+  ];
+
+  return (
+    <div
+      style={{
+        marginTop: '10px',
+        padding: '14px',
+        borderRadius: '10px',
+        border: '1px solid #e6e1d7',
+        background: '#fff',
+      }}
+    >
+      <div style={{ fontSize: '11px', color: '#9e9a91', marginBottom: '6px' }}>
+        KEYWORD MATCHES
+        {matches.length > 0 ? ` — found ${matches.length}` : ' — none found'}
+      </div>
+
+      {result.extracted_requirements.length > 0 && (
+        <div style={{ fontSize: '12px', color: '#6b665c', marginBottom: '8px' }}>
+          Requirements spotted: {result.extracted_requirements.join(', ')}
+        </div>
+      )}
+
+      {matches.map((m, i) => (
+        <div key={i} style={{ marginBottom: '8px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 500 }}>
+            {m.kind}: {m.name || 'Untitled'}
+          </div>
+          {m.matched.length > 0 && (
+            <div style={{ fontSize: '11px', color: '#9e9a91' }}>matched: {m.matched.join(', ')}</div>
+          )}
+        </div>
+      ))}
+
+      {matches.length === 0 && (
+        <div style={{ fontSize: '12px', color: '#6b665c' }}>
+          No literal keyword overlap with the JD. This is the keyword-only view —{' '}
+          <span style={{ fontWeight: 600 }}>Tailor CV</span> uses semantic matching and may still
+          find relevant experience.
+        </div>
+      )}
+    </div>
   );
 };
 

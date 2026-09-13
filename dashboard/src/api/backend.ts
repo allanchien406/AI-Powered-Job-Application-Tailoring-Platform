@@ -137,6 +137,34 @@ export interface GeneratedCV {
   education: Array<{ institution: string; degree: string; period: string }>;
 }
 
+export interface PreviewMatch {
+  score: number;
+  matched_terms: string[];
+  name?: string;
+  title?: string;
+  company?: string;
+  period?: string;
+  description: string;
+}
+
+export interface TailorPreviewResult {
+  message: string;
+  email: string;
+  job_id: string;
+  extracted_requirements: string[];
+  matched_projects: PreviewMatch[];
+  matched_experiences: PreviewMatch[];
+}
+
+/** Free keyword-only matching preview — unlike /tailor-generate this makes no
+ * Bedrock calls, so it's safe to run often (e.g. as the user edits). */
+export async function tailorPreview(email: string, jobId: string): Promise<TailorPreviewResult> {
+  return request('/tailor-preview', {
+    method: 'POST',
+    body: JSON.stringify({ email, job_id: jobId }),
+  });
+}
+
 /** Run the full matching + Bedrock generation pipeline against a saved job. */
 export async function generateTailoredCV(
   email: string,

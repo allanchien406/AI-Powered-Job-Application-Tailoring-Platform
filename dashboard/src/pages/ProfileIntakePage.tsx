@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCVStore } from '../store/useCVStore';
 import { Button, Card, Field, Input, SectionTitle, Tag, TextArea } from '../components/ui';
 import {
   parseProfileText,
   saveProfile,
+  getProfile,
   Profile,
   ExperienceEntry,
   ProjectEntry,
@@ -18,7 +19,7 @@ with Python and Postgres. Before that I did a year of frontend at a startup.
 On the side I built a budget-tracking app in React Native. I know Docker and
 AWS too."`;
 
-type Stage = 'paste' | 'parsing' | 'review' | 'saving' | 'saved';
+type Stage = 'loading' | 'paste' | 'parsing' | 'review' | 'saving' | 'saved';
 
 const emptyProfile: Profile = {
   full_name: '',
@@ -32,11 +33,34 @@ export const ProfileIntakePage: React.FC = () => {
   const navigate = useNavigate();
   const email = useCVStore((state) => state.email);
 
-  const [stage, setStage] = useState<Stage>('paste');
+  const [stage, setStage] = useState<Stage>('loading');
   const [rawText, setRawText] = useState('');
   const [profile, setProfile] = useState<Profile>(emptyProfile);
   const [newSkill, setNewSkill] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!email) return;
+    let cancelled = false;
+    setStage('loading');
+    setError(null);
+    getProfile(email)
+      .then((saved) => {
+        if (cancelled) return;
+        setProfile(saved);
+        setStage('review');
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setStage('paste');
+        if (!(e instanceof Error && e.message.includes('404'))) {
+          setError(e instanceof Error ? e.message : 'Could not load your saved profile.');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [email]);
 
   if (!email) {
     return (
@@ -106,7 +130,10 @@ export const ProfileIntakePage: React.FC = () => {
         <span style={{ fontSize: '11px', color: '#9e9a91' }}>{email}</span>
       </div>
       <p style={{ fontSize: '12px', color: '#6b665c', marginBottom: '20px' }}>
-        Paste it as prose — we'll turn it into a structured profile you can fix up before saving.
+        {(stage === 'paste' || stage === 'parsing') &&
+          'Paste it as prose — we\'ll turn it into a structured profile you can fix up before saving.'}
+        {(stage === 'review' || stage === 'saving') &&
+          'This is the profile saved to your account — edit anything, then save to update it.'}
       </p>
 
       {error && (
@@ -123,6 +150,12 @@ export const ProfileIntakePage: React.FC = () => {
         >
           {error}
         </div>
+      )}
+
+      {stage === 'loading' && (
+        <PanelCard>
+          <div style={{ fontSize: '12px', color: '#9e9a91' }}>Loading your profile…</div>
+        </PanelCard>
       )}
 
       {(stage === 'paste' || stage === 'parsing') && (

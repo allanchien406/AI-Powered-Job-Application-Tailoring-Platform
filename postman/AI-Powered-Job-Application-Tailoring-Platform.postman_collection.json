@@ -1,0 +1,380 @@
+{
+  "info": {
+    "name": "AI-Powered Job Application Tailoring Platform",
+    "description": "Requests for every live API endpoint of this project, against the currently staged backend (us-east-1). Endpoint reference: API.md.\n\nSuggested order (run the requests top-to-bottom in a folder):\n  1. Profile folder  - parse free text, save the profile, read it back\n  2. Job descriptions folder - save a job, read it back, list them (the save response stores job_id automatically)\n  3. Tailoring folder - keyword preview, then full Bedrock generation (both saved-job and ad-hoc paths)\n\nNotes:\n- profile-service: PUT /profile is an upsert keyed by email; project/experience embeddings are cached and reused if the text is unchanged, and education entries are stored as-is (never embedded or matched).\n- job-service: PUT /job-description always creates a brand-new item (fresh UUID every call - no dedup), normalizes email, and embeds raw_description at save time.\n- tailoring-service: /tailor-preview is keyword-only and free (no Bedrock). /tailor-generate is pure-embedding matching + a Claude Haiku 4.5 call. Both need a saved profile; /tailor-generate also accepts an ad-hoc job body that is never persisted.\n- The /cv/* endpoints from the old cv-service were removed from the deployed stack and are intentionally not included.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com"
+    },
+    {
+      "key": "email",
+      "value": "alex.morgan@example.com"
+    },
+    {
+      "key": "job_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Profile",
+      "item": [
+        {
+          "name": "POST /profile/parse - free text to profile schema",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('has a profile key', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('profile');",
+                  "  pm.expect(json.profile).to.have.property('full_name');",
+                  "  pm.expect(json.profile).to.have.property('experience');",
+                  "  pm.expect(json.profile).to.have.property('education');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"raw_text\": \"Backend-focused software engineer with about 4 years at Nimbus Software (2021-2024), where I built Python services on AWS and worked with Postgres, Docker, and CI/CD pipelines. Before that a stint at Loopware doing React frontend work. Personal side project: Budget Tracker, a full-stack web app I built in 2023 to learn modern frontend dev. Studied Computer Science at State University 2017-2021, graduated with honors.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/profile/parse",
+              "host": ["{{base_url}}"],
+              "path": ["profile", "parse"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /profile - create/upsert dummy profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('saved the profile', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.message).to.eql('Profile saved successfully');",
+                  "  pm.expect(json.embedding_warnings).to.be.undefined;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"{{email}}\",\n    \"full_name\": \"Alex Morgan\",\n    \"skills\": [\n        \"Python\",\n        \"AWS\",\n        \"PostgreSQL\",\n        \"Docker\",\n        \"CI/CD\",\n        \"TypeScript\"\n    ],\n    \"projects\": [\n        {\n            \"name\": \"Budget Tracker Web App\",\n            \"period\": \"2023\",\n            \"description\": \"Full-stack web app for tracking monthly spending, built with React on the front and a Python FastAPI service on the back, deployed to AWS.\"\n        },\n        {\n            \"name\": \"TripSplit\",\n            \"period\": \"2022\",\n            \"description\": \"React Native mobile app to split trip expenses between friends.\"\n        }\n    ],\n    \"experience\": [\n        {\n            \"title\": \"Software Engineer\",\n            \"company\": \"Nimbus Software\",\n            \"period\": \"2021-2024\",\n            \"description\": \"Built and maintained Python services on AWS for a SaaS analytics product; worked with Postgres, Docker, REST APIs, and CI/CD pipelines.\"\n        },\n        {\n            \"title\": \"Frontend Developer\",\n            \"company\": \"Loopware\",\n            \"period\": \"2019-2021\",\n            \"description\": \"Shipped React frontends at a small startup; introduced TypeScript and component-level testing.\"\n        }\n    ],\n    \"education\": [\n        {\n            \"institution\": \"State University\",\n            \"degree\": \"B.S. Computer Science\",\n            \"period\": \"2017-2021\",\n            \"description\": \"Graduated with honors; coursework in databases, distributed systems, and algorithms.\"\n        }\n    ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/profile",
+              "host": ["{{base_url}}"],
+              "path": ["profile"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /profile?email= - read it back",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('profile came back', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.email).to.eql(pm.variables.get('email'));",
+                  "  pm.expect(json).to.have.property('projects');",
+                  "  pm.expect(json).to.have.property('experience');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/profile?email={{email}}",
+              "host": ["{{base_url}}"],
+              "path": ["profile"],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "{{email}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Job descriptions",
+      "item": [
+        {
+          "name": "PUT /job-description - save a dummy job",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('job_id was captured for later requests', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('job_id');",
+                  "  pm.environment.set('job_id', json.job_id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"  {{email}}  \",\n    \"company_name\": \"Vertex Analytics\",\n    \"job_title\": \"Backend Software Engineer\",\n    \"raw_description\": \"Vertex Analytics is hiring a Backend Software Engineer. You will design and build Python services on AWS powering our analytics platform. Required experience: Python, REST APIs, PostgreSQL, Docker, and working in a CI/CD environment. A track record writing clean, tested code and collaborating with other engineers is a must. Familiarity with observability tooling and infrastructure as code is a plus.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/job-description",
+              "host": ["{{base_url}}"],
+              "path": ["job-description"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /job-description?email=&job_id= - read one",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('job came back', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.job_id).to.eql(pm.variables.get('job_id'));",
+                  "  pm.expect(json.company_name).to.eql('Vertex Analytics');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/job-description?email={{email}}&job_id={{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["job-description"],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "{{email}}"
+                },
+                {
+                  "key": "job_id",
+                  "value": "{{job_id}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /job-description/list?email= - list all",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('list contains the saved job', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.job_descriptions).to.be.an('array');",
+                  "  const ids = json.job_descriptions.map(j => j.job_id);",
+                  "  pm.expect(ids).to.include(pm.variables.get('job_id'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/job-description/list?email={{email}}",
+              "host": ["{{base_url}}"],
+              "path": ["job-description", "list"],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "{{email}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Tailoring",
+      "item": [
+        {
+          "name": "POST /tailor-preview - keyword-only match (free, no Bedrock)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('preview shape is right', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('extracted_requirements');",
+                  "  pm.expect(json).to.have.property('matched_projects');",
+                  "  pm.expect(json).to.have.property('matched_experiences');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"{{email}}\",\n    \"job_id\": \"{{job_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/tailor-preview",
+              "host": ["{{base_url}}"],
+              "path": ["tailor-preview"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /tailor-generate - bedrock generation, saved-job path",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('generated_cv came back', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('prompt_context');",
+                  "  pm.expect(json.generated_cv).to.have.property('summary');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"{{email}}\",\n    \"job_id\": \"{{job_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/tailor-generate",
+              "host": ["{{base_url}}"],
+              "path": ["tailor-generate"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /tailor-generate - ad-hoc job path (never persisted)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('generated_cv came back', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('prompt_context');",
+                  "  pm.expect(json.generated_cv).to.have.property('experience');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"{{email}}\",\n    \"company_name\": \"Acme Corp\",\n    \"job_title\": \"Data Analyst\",\n    \"raw_description\": \"Acme Corp is looking for a Data Analyst to turn metrics into decisions. You will build dashboards, write SQL against our data warehouse, and communicate findings to non-technical stakeholders. Requirements: strong SQL, experience with spreadsheets and BI tools, and clear written communication.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/tailor-generate",
+              "host": ["{{base_url}}"],
+              "path": ["tailor-generate"]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
