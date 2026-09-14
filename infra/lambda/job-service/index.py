@@ -27,6 +27,12 @@ def response(status_code, body):
     }
 
 
+def log_bedrock_usage(operation, **fields):
+    """See profile-service's log_bedrock_usage — same convention, filter with:
+    fields @message | filter @message like /BEDROCK_USAGE/"""
+    print("BEDROCK_USAGE " + json.dumps({"service": "job-service", "operation": operation, **fields}))
+
+
 def get_table():
     return dynamodb.Table(os.environ["JOB_DESCRIPTIONS_TABLE_NAME"])
 
@@ -35,7 +41,7 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def embed_text(text):
+def embed_text(text, job_id=None):
     if not text or not text.strip():
         return None
 
@@ -47,6 +53,12 @@ def embed_text(text):
         accept="application/json",
     )
     payload = json.loads(resp["body"].read())
+    log_bedrock_usage(
+        "embed_job_description",
+        model="titan-embed-v2",
+        job_id=job_id,
+        input_tokens=payload.get("inputTextTokenCount"),
+    )
     embedding = payload.get("embedding")
     if embedding is None:
         return None
@@ -61,7 +73,7 @@ def write_job_description(table, email, job_id, company_name, job_title, raw_des
     warnings = []
 
     try:
-        embedding = embed_text(raw_description)
+        embedding = embed_text(raw_description, job_id)
     except Exception as exc:
         # Broad on purpose: whatever went wrong with Bedrock, the job
         # description itself must still get saved. The fallback is

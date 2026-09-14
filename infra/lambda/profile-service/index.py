@@ -27,6 +27,14 @@ def response(status_code, body):
     }
 
 
+def log_bedrock_usage(operation, **fields):
+    """One structured line per Bedrock call so real token counts can be
+    pulled from CloudWatch Logs Insights instead of guessed — see PLAN.md's
+    "Measuring cost per user" section. Filter with:
+    fields @message | filter @message like /BEDROCK_USAGE/"""
+    print("BEDROCK_USAGE " + json.dumps({"service": "profile-service", "operation": operation, **fields}))
+
+
 def get_table():
     return dynamodb.Table(os.environ["PROFILES_TABLE_NAME"])
 
@@ -86,7 +94,7 @@ def normalize_profile_payload(data):
     }
 
 
-def embed_text(text):
+def embed_text(text, identity_value=None):
     if not text or not text.strip():
         return None
 
@@ -98,6 +106,12 @@ def embed_text(text):
         accept="application/json",
     )
     payload = json.loads(resp["body"].read())
+    log_bedrock_usage(
+        "embed_entry",
+        model="titan-embed-v2",
+        entry=identity_value,
+        input_tokens=payload.get("inputTextTokenCount"),
+    )
     embedding = payload.get("embedding")
     if embedding is None:
         return None
@@ -153,12 +167,12 @@ def attach_embeddings(new_entries, existing_entries, text_keys):
             entry = {**entry, "embedding": existing_entry["embedding"]}
         else:
             combined_text = " ".join(entry.get(key, "") for key in text_keys)
+            identity_value = entry.get(identity_key) or "(unnamed entry)"
             try:
-                entry = {**entry, "embedding": embed_text(combined_text)}
+                entry = {**entry, "embedding": embed_text(combined_text, identity_value)}
             except Exception as exc:
                 # Broad on purpose: whatever went wrong with Bedrock, the
                 # user's actual data must still get saved.
-                identity_value = entry.get(identity_key) or "(unnamed entry)"
                 print(f"embed_text failed for {identity_value!r}: {exc}")
                 entry = {**entry, "embedding": None}
                 warnings.append(f"{identity_value}: embedding failed, will retry on next save")
