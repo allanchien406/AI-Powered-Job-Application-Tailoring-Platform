@@ -378,6 +378,13 @@ CloudWatch logs clean on both `profile-service` and `tailoring-service`.
   partition-key scoping is structural, not just an unchecked assumption.
   CloudWatch logs clean across every test call. Confirmed independently via
   the manual test plan, per the testing workflow.
+  **Update-in-place (`PUT /job-description` with `job_id`) is now AWS-verified
+  too** — user-confirmed via the manual test plan: editing a saved job through
+  the dashboard (`JobDescriptionPage`'s Edit → Save changes) correctly updates
+  `company_name`/`job_title`/`raw_description` on the existing item rather
+  than creating a new one, the embedding is reused byte-for-byte when
+  `raw_description` text is unchanged, and a changed description text
+  correctly triggers a fresh embed. See Future improvements #2.
 - ✅ **`tailoring-service`** — deployed to the same staged stack and verified.
   `POST /tailor-preview` (keyword matching, `prompt_context` with
   `raw_job_description`, zero Bedrock calls) and `POST /tailor-generate`
