@@ -400,6 +400,44 @@ CloudWatch logs clean on both `profile-service` and `tailoring-service`.
 
 **Next up: frontend ↔ backend integration** — see the section below.
 
+## Measuring cost per user — ✅ logging implemented, pricing lookup still manual
+
+Prompted by wanting to know what a brand-new user costs from signup to a
+generated CV. Two things had to be separated: knowing *how many tokens* each
+step actually uses (solvable in-app), and knowing the *current price per
+token* for Claude Haiku 4.5 / Titan Embed V2 on Bedrock (not solvable
+reliably from here — the public Bedrock pricing page is JS-rendered and the
+AWS Price List API's `model` attribute doesn't yet index these newer models,
+so neither could be fetched with confidence; the reliable sources are AWS
+Cost Explorer, filtered to Bedrock, for what's already been spent, and the
+Bedrock console's own model page for current per-token rates).
+
+- **What was built:** every Bedrock call site in all four Lambdas
+  (`profile-service`, `job-service`, `intake-service`, `tailoring-service`)
+  now emits one `BEDROCK_USAGE {...}` log line per call, carrying the real
+  token counts already present in that call's own response — Titan's
+  `inputTextTokenCount`, Converse's `usage.inputTokens`/`outputTokens` —
+  rather than an estimate. Purely additive; no behavior change. Filter in
+  CloudWatch Logs Insights with `fields @message | filter @message like
+  /BEDROCK_USAGE/`.
+- **The exact call sequence for one new user**, confirmed by a real run (see
+  `TESTING.md`): `POST /profile/parse` (1× Claude Haiku), `PUT /profile` (1×
+  Titan per new/changed experience or project entry — 2 in the test run),
+  `PUT /job-description` (1× Titan), `POST /tailor-generate` (1× Claude
+  Haiku, 0 Titan calls since the JD and profile entries are already cached).
+  Measured real tokens for that run: Titan calls at 10–16 input tokens each;
+  Claude Haiku calls at 420/138 and 407/122 input/output tokens
+  respectively.
+- **What's still manual:** multiplying those real counts by the current
+  per-token price. That number should come from the Bedrock console
+  directly (account/region-specific, always current) rather than a value
+  fetched here — see `TESTING.md` for why the automated lookup wasn't
+  trustworthy enough to hand over a dollar figure.
+- Verified locally (20 checks against mocked Bedrock responses, confirming
+  the embedding cache still skips unchanged entries — logging added zero new
+  Bedrock calls) and against real AWS (see `TESTING.md`). Pending the user's
+  own manual confirmation before this is marked fully done.
+
 ## Frontend ↔ backend integration — 🚧 in progress
 
 All backend services are deployed and verified. The old `dashboard/`

@@ -10,6 +10,46 @@ API base URL `https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com`.
 
 ---
 
+## `BEDROCK_USAGE` logging (all four Lambdas)
+
+Added to answer "what does a brand-new user cost us from signup to a
+generated CV" (see `PLAN.md`) — every Bedrock call site now prints one
+structured log line with the real input/output token counts from that
+call's own response (Titan's `inputTextTokenCount`, Converse's
+`usage.inputTokens`/`outputTokens`), instead of estimating.
+
+**Local (mocked Bedrock, no AWS calls) — 20 checks, all pass:** correct log
+shape/fields per service; real token counts from the mocked response flow
+through unchanged; critically, the embedding cache still works exactly as
+before — for 2 profile entries where 1 was unchanged, only 1 Bedrock call
+(and 1 log line) was made, confirming the logging didn't accidentally make
+`attach_embeddings` re-embed unchanged entries.
+
+**Real AWS — full onboarding journey**, test email
+`usage.log.test@example.com` (deleted from DynamoDB after): `POST
+/profile/parse` → `PUT /profile` → `PUT /job-description` → `POST
+/tailor-generate`. All four calls succeeded; CloudWatch Logs Insights (filter
+`BEDROCK_USAGE`) showed exactly one line per Bedrock call, with real numbers:
+
+| Call | Model | Input tokens | Output tokens |
+|---|---|---|---|
+| `PUT /profile` → embed "Backend Engineer" experience | Titan Embed V2 | 11 | — |
+| `PUT /profile` → embed "Budget Tracker" project | Titan Embed V2 | 10 | — |
+| `PUT /job-description` → embed the JD | Titan Embed V2 | 16 | — |
+| `POST /profile/parse` → structure the pasted text | Claude Haiku 4.5 | 420 | 138 |
+| `POST /tailor-generate` → generate the CV | Claude Haiku 4.5 | 407 | 122 |
+
+Zero CloudWatch error events across all four services during the test
+window. This gives a real, measured baseline for one new user's onboarding
+cost — multiply by the current per-token price on the Bedrock console (not
+guessed here — see `PLAN.md`) rather than estimating token counts.
+
+**Status: usage logging verified end-to-end against real AWS. Purely
+additive (no behavior change) — pending the user's own manual confirmation
+before marking done in `PLAN.md`.**
+
+---
+
 ## Job description frontend (`JobDescriptionPage.tsx` → `job-service` + `tailoring-service`)
 
 Full headless-browser run against `npm run dev` (localhost:5173) talking to
