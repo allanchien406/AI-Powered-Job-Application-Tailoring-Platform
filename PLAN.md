@@ -450,9 +450,24 @@ Bedrock console's own model page for current per-token rates).
     spend for 1000 users to each complete onboarding once — confirms Bedrock
     cost was never the bottleneck at that scale; the real constraints are
     the ones already tracked in `PRODUCTION.md` (auth, throttling, storage).
+- **Cost scales with profile/JD size, not just call count** — confirmed with
+  a second real run: a richer profile (4 experience, 3 projects, 2
+  education, 16 skills) against a long, detailed JD (1928 chars) cost
+  **≈$0.00774**, about 3.6× the simple-profile run — driven almost entirely
+  by output tokens (a bigger profile makes for a longer structured
+  extraction; more matched entries + a longer JD make for a longer generated
+  CV). Titan embedding cost stayed a rounding error in both runs (37 tokens
+  vs. 569 tokens, against ~2,000 Claude tokens). Match quality held up too:
+  3 of 4 experience entries and 1 of 3 projects scored above
+  `MIN_SEMANTIC_SCORE`, correctly dropping the weakest-fit entries, with no
+  hallucinated employer. Full breakdown in `TESTING.md`. This means "cost
+  per user" isn't a single number — it's bounded below by a sparse profile
+  (~$0.002) and grows with how much career history and JD detail a real
+  user actually provides.
 - Verified locally (20 checks against mocked Bedrock responses, confirming
   the embedding cache still skips unchanged entries — logging added zero new
-  Bedrock calls) and against real AWS (see `TESTING.md`).
+  Bedrock calls) and against real AWS across two runs of different scale
+  (see `TESTING.md`).
 
 ## Frontend ↔ backend integration — 🚧 in progress
 

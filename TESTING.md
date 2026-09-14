@@ -44,9 +44,55 @@ window. This gives a real, measured baseline for one new user's onboarding
 cost — multiply by the current per-token price on the Bedrock console (not
 guessed here — see `PLAN.md`) rather than estimating token counts.
 
+Applying the user-supplied Anthropic pricing table (Claude Haiku 4.5:
+$1.00/$5.00 per 1M input/output tokens) to the Claude calls above: **≈
+$0.00213 per new user** (see `PLAN.md` → "Measuring cost per user" for the
+full breakdown and the Bedrock-vs-first-party pricing caveat).
+
 **Status: usage logging verified end-to-end against real AWS. Purely
-additive (no behavior change) — pending the user's own manual confirmation
-before marking done in `PLAN.md`.**
+additive (no behavior change) — now in active use across two real test runs
+(this one and the richer run below); no explicit "I confirm" from the user
+yet, but the output has been reviewed and built on directly (the cost
+calculation below).**
+
+### Second run — richer profile, longer JD (scaling check)
+
+Same flow, deliberately heavier input to see how cost scales: test email
+`richer.test@example.com` (deleted after), profile parsed from a paragraph
+describing **4 experience entries, 3 projects, 2 education entries, 16
+skills** (plus two hobbies — soccer coaching, woodworking — both correctly
+excluded from the extraction), against a **1928-character** job description
+(Senior SRE role, multi-section: responsibilities/requirements/nice-to-have).
+
+**Match quality:** 3 of 4 experience entries scored above
+`MIN_SEMANTIC_SCORE` (DevOps Engineer 0.466, Senior Backend Engineer 0.395,
+Software Engineer 0.27) — correctly dropping the least-relevant "Junior
+Developer / internal tooling scripts" entry. 1 of 3 projects matched (the
+Terraform/DynamoDB module, 0.22) — correctly dropping the budget-tracker app
+and the Discord bot. `generated_cv` used the real companies (Cascade
+Systems, Meridian Health, Quill Data) and real periods throughout — no
+hallucinated employer, same as every prior generation test. Zero CloudWatch
+errors across all four services.
+
+**Real token counts:**
+
+| Call | Model | Input | Output |
+|---|---|---|---|
+| 7× profile entry embeds (15, 27, 18, 36, 42, 24, 16) | Titan Embed V2 | 178 total | — |
+| JD embed (1928-char description) | Titan Embed V2 | 391 | — |
+| `POST /profile/parse` | Claude Haiku 4.5 | 824 | 675 |
+| `POST /tailor-generate` | Claude Haiku 4.5 | 1142 | 480 |
+
+**Cost at the same Haiku 4.5 rate:** 1966×$0.000001 + 1155×$0.000005 ≈
+**$0.00774** — about **3.6× the simple-profile run's $0.00213**, driven
+mostly by output tokens: a richer profile produces a longer structured
+extraction, and more matched entries + a longer JD produce a longer
+generated CV. Titan's contribution stays negligible in both runs (37 tokens
+vs. 569 tokens — still a rounding error next to ~2,000 Claude tokens).
+
+**Status: cost-scaling behavior verified against real AWS — cost grows with
+profile/JD size roughly as expected, dominated by Claude Haiku output
+tokens, not Titan embedding calls.**
 
 ---
 
