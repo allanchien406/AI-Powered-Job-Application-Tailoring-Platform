@@ -13,6 +13,12 @@ export interface EducationEntry {
   period: string;
 }
 
+export interface JobRef {
+  company_name: string;
+  job_title: string;
+  raw_description: string;
+}
+
 export interface CVData {
   name: string;
   title: string;
@@ -26,18 +32,4 @@ export interface CVData {
   education: EducationEntry[];
   skills: string[];
   accentColor: string;
-}
-
-export type TemplateId = 'modern' | 'classic' | 'minimal';
-
-export interface Template {
-  id: TemplateId;
-  name: string;
-  description: string;
-}
-
-export interface Note {
-  id: string;
-  text: string;
-  createdAt: string;
 }

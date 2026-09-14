@@ -182,6 +182,16 @@ scoring exists. Revisit as real usage data accumulates.
   output schema gains `education` and stops hard-coding `"Not specified"` for
   `period`), and the frontend (`backend.ts` types + `ProfileIntakePage`
   gained period inputs and a whole Education section).
+- **AWS-verified** (see `TESTING.md` → "Schema: `education` + `period`"):
+  save/read round-trip; raw DynamoDB scan confirmed `education` items carry no
+  `embedding` key while `experience`/`projects` do; editing only `period`
+  left the stored embedding vector byte-identical (cache correctly reused);
+  `/tailor-generate` surfaced real `company`/`period` (no hallucinated
+  employer) and a correct `education` array in both `prompt_context` and
+  `generated_cv`; `/profile/parse` correctly extracted `period` and
+  `education` from free text; CloudWatch clean across all three services.
+  Verified by me against the real deployed stack, and confirmed by the user's
+  own manual pass — **done**.
 
 ## Generation — ✅ implemented
 
@@ -315,18 +325,11 @@ scoring exists. Revisit as real usage data accumulates.
 
 ## Open decisions
 
-- ❓ **No dedup on `job-service` save.** Every `PUT /job-description` creates a
-  brand-new item with a fresh UUID `job_id`, even if it's an identical
-  resubmission — a double-click, a client retry after a timeout, or the same
-  JD pasted again while iterating on a profile. Once `/job-description/list`
-  is actually used by a frontend, this could mean duplicate entries piling up
-  in someone's saved-jobs list. Raised during `job-service`'s review; left as
-  a product/scope call, not fixed.
-- ❓ **No delete/archive for job descriptions.** `cv-service` had soft-delete
-  (`is_archived`) before it was dropped; `job-service` has no equivalent —
-  once saved, a job description sits there permanently with no way to remove
-  it. Same status: raised, not fixed, pending a decision on whether/how this
-  app should support it.
+- ❓ **No dedup, no delete/archive on `job-service`.** Update-in-place is now
+  supported (an optional `job_id` on `PUT /job-description` edits the existing
+  entry — see **Future improvements #2**), but every `PUT` without a `job_id`
+  still makes a fresh UUID even for an identical resubmission, and there's no
+  `DELETE` or soft-delete like `cv-service` used to have.
 
 ## Known bugs, pending fix
 
@@ -375,6 +378,13 @@ CloudWatch logs clean on both `profile-service` and `tailoring-service`.
   partition-key scoping is structural, not just an unchecked assumption.
   CloudWatch logs clean across every test call. Confirmed independently via
   the manual test plan, per the testing workflow.
+  **Update-in-place (`PUT /job-description` with `job_id`) is now AWS-verified
+  too** — user-confirmed via the manual test plan: editing a saved job through
+  the dashboard (`JobDescriptionPage`'s Edit → Save changes) correctly updates
+  `company_name`/`job_title`/`raw_description` on the existing item rather
+  than creating a new one, the embedding is reused byte-for-byte when
+  `raw_description` text is unchanged, and a changed description text
+  correctly triggers a fresh embed. See Future improvements #2.
 - ✅ **`tailoring-service`** — deployed to the same staged stack and verified.
   `POST /tailor-preview` (keyword matching, `prompt_context` with
   `raw_job_description`, zero Bedrock calls) and `POST /tailor-generate`
@@ -409,9 +419,28 @@ named, blank where not, jazz-band hobby excluded), an edit to the name
 persisted, and a direct `GET /profile` confirmed the round-trip. Zero console
 errors. See `TESTING.md`.
 
-Still to do: the tailoring half — job description input → `/tailor-generate` →
-show the generated CV — and deciding what happens to the stale
-`CVBuilderPage`/`MyCVsPage`/`cvApi.ts`.
+**Job description + tailoring flow — ✅ wired end to end.** `backend.ts`
+extended with `saveJobDescription`/`listJobDescriptions`/`generateTailoredCV`
+(and the `JobDescriptionInput`/`StoredJobDescription`/`GeneratedCV`/
+`PromptContext` types). New `JobDescriptionPage.tsx` at `/jobs`: paste
+company/title/description → `PUT /job-description` → appears in a saved-jobs
+list (`GET /job-description/list`) → **Tailor CV** on any saved job calls
+`POST /tailor-generate` and renders the generated title/summary/experience/
+education inline on that job's card. `ProfileIntakePage`'s "saved" screen now
+links forward to `/jobs`, completing the loop from the login page. Verified
+end to end in a headless browser against the real deployed backend: signed
+in → parsed+saved a profile (Nimbus Software experience, Budget Tracker
+project, State University education) → saved a Vertex Analytics job posting
+→ generated a CV that used the *real* profile data (Nimbus Software, correct
+period, State University) rather than fabricating an employer from the target
+company name → reloaded the page and confirmed the saved job list persists
+via `GET /job-description/list`. Zero console errors, zero CloudWatch errors
+across all four Lambdas. See `TESTING.md`.
+
+Still to do: deciding what happens to the stale
+`CVBuilderPage`/`MyCVsPage`/`cvApi.ts`, and (smaller) `/tailor-preview`
+(the free keyword-only route) isn't wired into the frontend anywhere yet —
+only the paid `/tailor-generate` path is.
 
 **Free-text experience → the profile-service JSON schema — ✅ backend built and
 tested against real AWS.** Two runs (a rambling casual paragraph, and a sparse
@@ -439,11 +468,65 @@ one Claude call. Chosen shape:
 - Output is coerced to exactly the `PUT /profile` schema (empty entries
   dropped, trimmed, `company` left blank when no employer named).
 
+## Voice interview agent — 🚧 decided, not yet built
+
+Full spec (product decisions, architecture, phased interview flow, constraints,
+deferred items, verification approach) tracked in **`VOICE_INTERVIEW.md`**. Status
+markers update here; design detail lives in that file.
+
+## Future improvements — 📝 noted, not started
+
+User-proposed, captured here for later. Not designed or scoped yet.
+
+1. **Profile updates should merge, not overwrite.** `PUT /profile` today is a
+   full replace — `normalize_profile_payload` takes exactly what's in the
+   request body and that becomes the whole item (see `save_profile` in
+   `profile-service`). `ProfileIntakePage` compounds this on the frontend
+   side too: it always starts from a blank form (`stage: 'paste'`), so
+   there's no way to see what's already saved before adding to it — a user
+   has to re-paste their entire background to add one new job. Fix likely
+   needs both ends: the frontend should load the existing saved profile into
+   the review form (pre-filled, editable) instead of starting blank, and/or
+   `profile-service` should support adding a single entry without requiring
+   the full profile in the request. Worth deciding whether "merge" means
+   append-only (never lose data unless explicitly removed) or still
+   full-replace-but-easier-to-edit (pre-filled form, same overwrite
+   semantics underneath) — those are different amounts of backend work.
+2. **Saved job list needs delete.** Edit is now built: `PUT /job-description`
+   accepts an optional `job_id` and updates the existing entry in place
+   (re-embedding `raw_description`'s vector only when the description text
+   actually changes, so a title/company-only edit doesn't burn a Bedrock call —
+   mirrored on the dashboard by `Edit` → `Save changes` on any saved job).
+   What's still missing is `DELETE /job-description` — there's no way to remove
+   a saved job from the list yet.
+3. **Reduce what's sent to the LLM — cost and security.** Two angles worth
+   separating: (a) *cost* — trimming prompt size (e.g. capping
+   `raw_job_description` length before it hits `/tailor-generate`, not just
+   `MAX_RAW_TEXT_CHARS` on the intake side) and avoiding redundant context
+   across calls; (b) *security* — right now full profile text (real name,
+   real employers, potentially other PII) goes into every Bedrock prompt.
+   Worth considering what's actually necessary to send vs. what's
+   convenient, and whether anything should be redacted/minimized before it
+   leaves the account boundary into the model call.
+4. **PDF export needs to be ATS-friendly.** Already tracked below under
+   "Deferred / explicitly out of scope" — `exportPDF.ts` currently rasterizes
+   via `html2canvas` into an image-in-a-PDF with no extractable text, which
+   defeats ATS parsing regardless of how good the generated content is.
+   Restating here because it's now specifically tied to the *generated* CV
+   from `/tailor-generate`, not just the manual builder.
+5. **Cover letter generation.** A new capability, not just a fix — likely a
+   new Bedrock-backed route (e.g. `POST /cover-letter-generate`) that takes
+   the same `{email, job_id}` shape as `/tailor-generate` and reuses the same
+   matched-profile-data + anti-hallucination prompt discipline established
+   there, producing a tailored cover letter instead of (or alongside) the CV
+   sections.
+
 ## Deferred / explicitly out of scope
 
 - ⏸ **ATS-safe export.** `exportPDF.ts` rasterizes the CV via `html2canvas` into a
   PNG-in-a-PDF (no extractable text), and `ModernTemplate.tsx` is two-column —
-  both defeat "ATS-friendly" regardless of AI content. Separate follow-up.
+  both defeat "ATS-friendly" regardless of AI content. Now tracked with full
+  context under **Future improvements #4**.
 - ⏸ **CV persistence.** Dropped along with `cv-service`. No backend for
   saving/loading a generated or edited CV until the dashboard redesign defines a
   new approach.
@@ -452,7 +535,9 @@ one Claude call. Chosen shape:
 - ⏸ **Profile schema gap (partially closed).** `education` and per-entry
   `period` were added (see "Schema: education + period" below). Still missing
   vs a full `CVData`: `phone`/`location`/`website`/`linkedin` and a top-level
-  `title` — `generated_cv` still leaves those to be filled in manually.
+  `title` — `generated_cv` still leaves those to be filled in manually. (A
+  related but distinct concern — *how* a profile gets updated, not *what
+  fields* it has — is Future improvement #1.)
 
 ## Verification checklist (once deployed)
 

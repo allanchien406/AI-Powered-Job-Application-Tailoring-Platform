@@ -94,6 +94,12 @@ def response(status_code, body):
     }
 
 
+def log_bedrock_usage(operation, **fields):
+    """See profile-service's log_bedrock_usage — same convention, filter with:
+    fields @message | filter @message like /BEDROCK_USAGE/"""
+    print("BEDROCK_USAGE " + json.dumps({"service": "tailoring-service", "operation": operation, **fields}))
+
+
 def profiles_table():
     return dynamodb.Table(os.environ["PROFILES_TABLE_NAME"])
 
@@ -261,7 +267,7 @@ def score_experience(profile, extracted_requirements):
 # component — see score_entries_with_semantics for why. ---
 
 
-def embed_text(text):
+def embed_text(text, label=None):
     """Call Bedrock Titan Embeddings and return the raw embedding as a plain
     list of floats. Used here for two things: embedding an ad-hoc (never
     persisted) job description, and as a fallback for any profile entry that
@@ -279,17 +285,23 @@ def embed_text(text):
         accept="application/json",
     )
     payload = json.loads(resp["body"].read())
+    log_bedrock_usage(
+        "embed_fallback",
+        model="titan-embed-v2",
+        label=label,
+        input_tokens=payload.get("inputTextTokenCount"),
+    )
     return payload.get("embedding")
 
 
-def safe_embed_text(text):
+def safe_embed_text(text, label=None):
     """embed_text, but a Bedrock failure degrades to "no embedding" instead
     of failing the whole /tailor-generate request. Safe to do because
     cosine_similarity already treats a None vector as "no semantic signal"
     (returns 0.0) rather than raising — so a failed embed here just means
     that one piece falls back to no semantic contribution, not a crash."""
     try:
-        return embed_text(text)
+        return embed_text(text, label)
     except Exception as exc:
         print(f"embed_text failed: {exc}")
         return None
@@ -351,7 +363,7 @@ def score_entries_with_semantics(entries, jd_vector, title_field, description_fi
         embedding_failed = False
         if entry_vector is None:
             # Safety net for entries saved before embeddings existed.
-            entry_vector = safe_embed_text(f"{title_text} {description_text}")
+            entry_vector = safe_embed_text(f"{title_text} {description_text}", title_text or "(unnamed entry)")
             embedding_failed = entry_vector is None
         semantic_score = cosine_similarity(jd_vector, entry_vector) if entry_vector else 0.0
 
@@ -467,6 +479,13 @@ def call_bedrock_for_tailoring(prompt_context):
         messages=[{"role": "user", "content": [{"text": json.dumps(prompt_context)}]}],
         inferenceConfig={"maxTokens": 1024, "temperature": 0.4},
     )
+    usage = resp.get("usage", {})
+    log_bedrock_usage(
+        "tailor_generate",
+        model="claude-haiku-4.5",
+        input_tokens=usage.get("inputTokens"),
+        output_tokens=usage.get("outputTokens"),
+    )
     raw_text = resp["output"]["message"]["content"][0]["text"]
     return json.loads(strip_code_fence(raw_text))
 
@@ -537,14 +556,16 @@ def handle_tailor_generate(event):
         job_description = get_job_description_by_id(email, data["job_id"])
         if not job_description:
             return response(404, {"error": "Job description not found"})
-        jd_vector = to_float_vector(job_description.get("embedding")) or safe_embed_text(job_description["raw_description"])
+        jd_vector = to_float_vector(job_description.get("embedding")) or safe_embed_text(
+            job_description["raw_description"], data["job_id"]
+        )
     else:
         # Ad-hoc path: nothing saved, nothing cached — embed it fresh.
         missing = [field for field in ("company_name", "job_title", "raw_description") if not data.get(field)]
         if missing:
             return response(400, {"error": f"{missing[0]} is required when job_id is omitted"})
         job_description = {key: data[key] for key in ("company_name", "job_title", "raw_description")}
-        jd_vector = safe_embed_text(job_description["raw_description"])
+        jd_vector = safe_embed_text(job_description["raw_description"], "(ad-hoc job)")
 
     matched_projects = score_projects_with_semantics(profile, jd_vector)
     matched_experiences = score_experience_with_semantics(profile, jd_vector)

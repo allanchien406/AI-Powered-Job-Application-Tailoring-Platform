@@ -1,261 +1,137 @@
 import { create } from 'zustand';
-import { immer } from 'zustand/middleware/immer';
-import { v4 as uuid } from 'uuid';
-import { CVData, TemplateId, ExperienceEntry, EducationEntry } from '../types';
+import { CVData, JobRef } from '../types';
+import { GeneratedCV, StoredProfile } from '../api/backend';
+import { generatedCvToCVData } from '../utils/cv';
 
-const DEFAULT_CV: CVData = {
-  name: 'Alexandra Chen',
-  title: 'Senior Product Designer',
-  email: 'a.chen@email.com',
-  phone: '+64 21 555 0123',
-  location: 'Auckland, New Zealand',
-  website: 'alexchen.design',
-  linkedin: 'linkedin.com/in/alexchen',
-  summary:
-    'Product designer with 8 years of experience crafting intuitive digital experiences for global audiences. Passionate about systems thinking and accessible design.',
-  experience: [
-    {
-      id: uuid(),
-      company: 'Canva',
-      role: 'Senior Product Designer',
-      period: '2021 – Present',
-      description:
-        'Led design system overhaul serving 40M+ users. Collaborated with cross-functional teams to ship 12 major features. Mentored 3 junior designers.',
-    },
-    {
-      id: uuid(),
-      company: 'Xero',
-      role: 'UX Designer',
-      period: '2018 – 2021',
-      description:
-        'Redesigned the invoicing flow, reducing task completion time by 34%. Conducted 80+ user interviews and established a monthly research cadence.',
-    },
-  ],
-  education: [
-    {
-      id: uuid(),
-      institution: 'University of Auckland',
-      degree: 'Bachelor of Design (Hons)',
-      period: '2014 – 2018',
-    },
-  ],
-  skills: ['Figma', 'Prototyping', 'User Research', 'Design Systems', 'Accessibility', 'React'],
-  accentColor: '#2c4a3e',
-};
-
-interface CVStore {
-  cv: CVData;
-  email: string;
-  template: TemplateId;
-  notes: string;
-  zoom: number;
-  aiSidebarOpen: boolean;
-  past: CVData[];
-  future: CVData[];
-
-  // Auth
-  login: (email: string) => void;
-  logout: () => void;
-
-  // CV field actions
-  updateField: <K extends keyof CVData>(field: K, value: CVData[K]) => void;
-
-  // Experience
-  addExperience: () => void;
-  updateExperience: (id: string, field: keyof ExperienceEntry, value: string) => void;
-  removeExperience: (id: string) => void;
-  moveExperience: (id: string, direction: 'up' | 'down') => void;
-
-  // Education
-  addEducation: () => void;
-  updateEducation: (id: string, field: keyof EducationEntry, value: string) => void;
-  removeEducation: (id: string) => void;
-
-  // Skills
-  addSkill: (skill: string) => void;
-  removeSkill: (skill: string) => void;
-
-  // CV load/reset
-  loadCV: (cv: CVData) => void;
-  resetCV: () => void;
-
-  // App state
-  setTemplate: (id: TemplateId) => void;
-  setNotes: (notes: string) => void;
-  setZoom: (zoom: number) => void;
-  toggleAISidebar: () => void;
-
-  // Undo / redo
-  undo: () => void;
-  redo: () => void;
-  canUndo: () => boolean;
-  canRedo: () => boolean;
+export interface ViewerMeta {
+  companyName: string;
+  jobTitle: string;
 }
 
-const HISTORY_LIMIT = 50;
+export interface TailoredCVEntry {
+  jobId: string;
+  meta: ViewerMeta;
+  jobRef: JobRef;
+  cv: CVData;
+  generatedAt: string;
+}
 
-const cloneCv = (cv: CVData): CVData => {
-  return JSON.parse(JSON.stringify(cv)) as CVData;
-};
+interface AppStore {
+  email: string;
+  cvs: TailoredCVEntry[];
+  viewerCv: CVData | null;
+  viewerMeta: ViewerMeta | null;
+  viewerJobId: string | null;
 
-const storedEmail = (typeof localStorage !== 'undefined' ? localStorage.getItem('cv_email') : null) || '';
+  login: (email: string) => void;
+  logout: () => void;
+  saveGeneratedCV: (profile: StoredProfile | null, generated: GeneratedCV, jobId: string, jobRef: JobRef) => void;
+  selectCV: (jobId: string) => void;
+  getCVForJob: (jobId: string) => TailoredCVEntry | undefined;
+}
 
-export const useCVStore = create<CVStore>()(
-  immer((set, get) => ({
-    cv: DEFAULT_CV,
-    email: storedEmail,
-    template: 'modern',
-    notes: '• Follow up with recruiter by Friday\n• Tailor summary for tech roles\n• Add portfolio link once live',
-    zoom: 0.72,
-    aiSidebarOpen: false,
-    past: [],
-    future: [],
+const EMAIL_KEY = 'cv_email';
+// One cached CV per saved job, so re-tailoring an unedited job opens the
+// existing result instead of regenerating it. Versioned so a schema change
+// can invalidate old persisted data cleanly.
+const DIR_STORAGE_KEY = 'cv_tailor_dir_v1';
+const OLD_VIEWER_STORAGE_KEY = 'cv_tailor_viewer_v1';
 
-    login: (email) => {
-      localStorage.setItem('cv_email', email);
-      set((state) => { state.email = email; });
-    },
+interface PersistedDir {
+  cvs: TailoredCVEntry[];
+  viewerJobId: string | null;
+}
 
-    logout: () => {
-      localStorage.removeItem('cv_email');
-      set((state) => {
-        state.email = '';
-        state.cv = DEFAULT_CV;
-        state.past = [];
-        state.future = [];
-      });
-    },
-
-    loadCV: (cv) => {
-      set((state) => {
-        state.past = [];
-        state.future = [];
-        state.cv = cv;
-      });
-    },
-
-    resetCV: () => {
-      set((state) => {
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.future = [];
-        state.cv = cloneCv(DEFAULT_CV);
-      });
-    },
-
-    updateField: (field, value) => {
-      set((state) => {
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.future = [];
-        (state.cv as Record<string, unknown>)[field as string] = value;
-      });
-    },
-
-    addExperience: () => {
-      set((state) => {
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.future = [];
-        state.cv.experience.push({ id: uuid(), company: '', role: '', period: '', description: '' });
-      });
-    },
-
-    updateExperience: (id, field, value) => {
-      set((state) => {
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.future = [];
-        const entry = state.cv.experience.find((e) => e.id === id);
-        if (entry) entry[field] = value;
-      });
-    },
-
-    removeExperience: (id) => {
-      set((state) => {
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.future = [];
-        state.cv.experience = state.cv.experience.filter((e) => e.id !== id);
-      });
-    },
-
-    moveExperience: (id, direction) => {
-      set((state) => {
-        const arr = state.cv.experience;
-        const idx = arr.findIndex((e) => e.id === id);
-        if (direction === 'up' && idx > 0) {
-          [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
-        } else if (direction === 'down' && idx < arr.length - 1) {
-          [arr[idx + 1], arr[idx]] = [arr[idx], arr[idx + 1]];
+function loadDir(): PersistedDir {
+  try {
+    const raw = localStorage.getItem(DIR_STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as PersistedDir;
+  } catch {
+    // fall through to migration below
+  }
+  // One-time migration from the old single-viewer format.
+  try {
+    const raw = localStorage.getItem(OLD_VIEWER_STORAGE_KEY);
+    if (raw) {
+      const old = JSON.parse(raw);
+      if (old?.viewerCv && old?.viewerMeta) {
+        const migrated: PersistedDir = {
+          cvs: [
+            {
+              jobId: '',
+              meta: old.viewerMeta,
+              jobRef: { company_name: '', job_title: '', raw_description: '' },
+              cv: old.viewerCv,
+              generatedAt: '',
+            },
+          ],
+          viewerJobId: '',
+        };
+        try {
+          localStorage.setItem(DIR_STORAGE_KEY, JSON.stringify(migrated));
+        } catch {
+          // ignore — in-memory state still works
         }
-      });
-    },
+        return migrated;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { cvs: [], viewerJobId: null };
+}
 
-    addEducation: () => {
-      set((state) => {
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.future = [];
-        state.cv.education.push({ id: uuid(), institution: '', degree: '', period: '' });
-      });
-    },
+function persist({ cvs, viewerJobId }: PersistedDir) {
+  try {
+    localStorage.setItem(DIR_STORAGE_KEY, JSON.stringify({ cvs, viewerJobId }));
+  } catch {
+    // private-mode / quota — in-memory state still works
+  }
+}
 
-    updateEducation: (id, field, value) => {
-      set((state) => {
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.future = [];
-        const entry = state.cv.education.find((e) => e.id === id);
-        if (entry) entry[field] = value;
-      });
-    },
+const initial = loadDir();
 
-    removeEducation: (id) => {
-      set((state) => {
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.future = [];
-        state.cv.education = state.cv.education.filter((e) => e.id !== id);
-      });
-    },
+export const useCVStore = create<AppStore>((set, get) => ({
+  email: (typeof localStorage !== 'undefined' ? localStorage.getItem(EMAIL_KEY) : null) || '',
+  cvs: initial.cvs,
+  viewerCv: initial.cvs.find((c) => c.jobId === initial.viewerJobId)?.cv ?? initial.cvs[0]?.cv ?? null,
+  viewerMeta: initial.cvs.find((c) => c.jobId === initial.viewerJobId)?.meta ?? initial.cvs[0]?.meta ?? null,
+  viewerJobId: initial.cvs.find((c) => c.jobId === initial.viewerJobId)?.jobId ?? initial.cvs[0]?.jobId ?? null,
 
-    addSkill: (skill) => {
-      set((state) => {
-        if (!state.cv.skills.includes(skill)) {
-          state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-          state.future = [];
-          state.cv.skills.push(skill);
-        }
-      });
-    },
+  login: (email) => {
+    localStorage.setItem(EMAIL_KEY, email);
+    set({ email });
+  },
 
-    removeSkill: (skill) => {
-      set((state) => {
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.future = [];
-        state.cv.skills = state.cv.skills.filter((s) => s !== skill);
-      });
-    },
+  logout: () => {
+    localStorage.removeItem(EMAIL_KEY);
+    localStorage.removeItem(DIR_STORAGE_KEY);
+    localStorage.removeItem(OLD_VIEWER_STORAGE_KEY);
+    set({ email: '', cvs: [], viewerCv: null, viewerMeta: null, viewerJobId: null });
+  },
 
-    setTemplate: (id) => set((state) => { state.template = id; }),
-    setNotes: (notes) => set((state) => { state.notes = notes; }),
-    setZoom: (zoom) => set((state) => { state.zoom = zoom; }),
-    toggleAISidebar: () => set((state) => { state.aiSidebarOpen = !state.aiSidebarOpen; }),
+  saveGeneratedCV: (profile, generated, jobId, jobRef) => {
+    const cv = generatedCvToCVData(generated, profile);
+    const entry: TailoredCVEntry = {
+      jobId,
+      meta: { companyName: jobRef.company_name, jobTitle: jobRef.job_title },
+      jobRef,
+      cv,
+      generatedAt: new Date().toISOString(),
+    };
+    const cvs = get().cvs.some((c) => c.jobId === jobId)
+      ? get().cvs.map((c) => (c.jobId === jobId ? entry : c))
+      : [...get().cvs, entry];
+    persist({ cvs, viewerJobId: jobId });
+    set({ cvs, viewerCv: entry.cv, viewerMeta: entry.meta, viewerJobId: jobId });
+  },
 
-    undo: () => {
-      set((state) => {
-        if (state.past.length === 0) return;
-        const prev = state.past[state.past.length - 1];
-        state.future = [cloneCv(state.cv), ...state.future.slice(0, HISTORY_LIMIT)];
-        state.cv = prev;
-        state.past = state.past.slice(0, -1);
-      });
-    },
+  selectCV: (jobId) => {
+    const entry = get().cvs.find((c) => c.jobId === jobId);
+    if (!entry) return;
+    persist({ cvs: get().cvs, viewerJobId: jobId });
+    set({ viewerCv: entry.cv, viewerMeta: entry.meta, viewerJobId: jobId });
+  },
 
-    redo: () => {
-      set((state) => {
-        if (state.future.length === 0) return;
-        const next = state.future[0];
-        state.past = [...state.past.slice(-HISTORY_LIMIT), cloneCv(state.cv)];
-        state.cv = next;
-        state.future = state.future.slice(1);
-      });
-    },
-
-    canUndo: () => get().past.length > 0,
-    canRedo: () => get().future.length > 0,
-  }))
-);
+  getCVForJob: (jobId) => get().cvs.find((c) => c.jobId === jobId),
+}));

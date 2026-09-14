@@ -10,6 +10,102 @@ API base URL `https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com`.
 
 ---
 
+## Job description frontend (`JobDescriptionPage.tsx` → `job-service` + `tailoring-service`)
+
+Full headless-browser run against `npm run dev` (localhost:5173) talking to
+the real deployed backend. Test email `jd.frontend.test@example.com`, all
+data deleted from DynamoDB after.
+
+**Flow driven:**
+1. Sign in (fresh email) → landed on `/profile`.
+2. Pasted a background paragraph (Nimbus Software 2021–2024, Budget Tracker
+   project 2023, State University CS degree 2017–2021) → **Build my profile**
+   → parsed correctly → **Save profile** → "Profile saved ✓".
+3. Clicked the new **Add a job to tailor for →** link on the saved screen →
+   landed on `/jobs`.
+4. Filled in company "Vertex Analytics", title "Backend Software Engineer",
+   and a Python/AWS job description → **Save job** → appeared immediately in
+   the saved-jobs list (optimistic add from the `PUT` response, no extra
+   fetch needed).
+5. Clicked **Tailor CV** on that job → `POST /tailor-generate` → generated
+   result rendered inline on the job's card:
+   > "Backend Software Engineer" — "Software engineer with experience
+   > building Python services on AWS..." — Experience: "Software Engineer ·
+   > Nimbus Software · 2021-2024" — Education: "Computer Science · State
+   > University · 2017-2021"
+   - **Real profile data used, not the target company** — "Nimbus Software"
+     appears as the employer, not "Vertex Analytics." Confirms the
+     anti-hallucination fix still holds through the new frontend path.
+6. Reloaded the page → saved job list still showed "Backend Software
+   Engineer" (`GET /job-description/list` round-trip confirmed).
+
+**Console errors: none.** **CloudWatch (profile-service, tailoring-service,
+intake-service, job-service, 10-minute window): zero error events.**
+
+**Status: job description + tailoring frontend flow verified end-to-end
+against real AWS.**
+
+---
+
+## Schema: `education` + `period` (all three services)
+
+Deployed via `test/deploy-profile-service` (merged from `develop` @ `e2f98d8`).
+Test email `edu.period.test@example.com`, deleted from DynamoDB after.
+
+**Test 1 — `PUT /profile` with education + period, then `GET /profile`
+round-trip:** saved a profile with one experience entry (`period: "2021-2024"`),
+one project (`period: "2023"`), one education entry (`institution`, `degree`,
+`period: "2017-2021"`, `description`). Both the `PUT` response and a follow-up
+`GET` returned all fields intact, correctly nested. ✓
+
+**Test 2 — raw DynamoDB scan** to confirm the embedding design decision landed
+exactly as intended:
+- `experience` item keys: `company, title, period, description, embedding` — has embedding (1024 floats) ✓
+- `projects` item keys: `embedding, period, name, description` — has embedding ✓
+- `education` item keys: `description, institution, degree, period` — **no embedding key at all** ✓ (education is pure pass-through, like skills — never scored/matched)
+
+**Test 3 — editing only `period` reuses the cached embedding:** re-saved the
+same profile with the experience `period` changed (`"2021-2024"` →
+`"2021-2025"`, description/title/company unchanged). Compared the stored
+embedding vector before and after — **byte-identical** (`-0.0818987637758255,
+0.02513905242085457, -0.03089732490479946...` both times), while `period`
+correctly updated to the new value. Confirms `period` is excluded from the
+embed-relevant `text_keys` as designed — editing dates alone doesn't burn a
+Bedrock call or invalidate the cache. ✓
+
+**Test 4 — full `/tailor-generate` flow** against that profile (job: "Backend
+Software Engineer" @ "Vertex Analytics", Python/AWS/API description):
+- `prompt_context.matched_experiences` included the real `company` ("Nimbus
+  Software") and `period` ("2021-2025") pass-through fields alongside the score.
+- `prompt_context.education` surfaced the full entry (institution, degree,
+  period, description) — unscored, as designed.
+- `generated_cv.experience` used the **real** company/period, not the target
+  company — no hallucination (this was the exact bug class fixed earlier in
+  the session; confirms the fix still holds with the new fields in play).
+- `generated_cv.education` correctly included the real institution/degree/
+  period, and the summary naturally referenced the CS background without
+  inventing anything not in the input.
+- `matched_projects` was empty for this JD — the one saved project ("Budget
+  Tracker") reasonably didn't score above threshold for a backend-engineer
+  posting; expected behavior, not a bug.
+
+**Test 5 — `POST /profile/parse` extraction of period + education from free
+text** (text mentioning a CS degree 2016–2020 with honors, a Data Analyst
+role 2020–2023, and a 2023 side project): all three sections extracted with
+correct `period` values (`"2016-2020"`, `"2020-2023"`, `"2023"`) and the
+education entry correctly split into `institution`/`degree`/`period`/
+`description` ("Graduated with honors"). No fabricated fields.
+
+**CloudWatch logs**: checked `profile-service`, `tailoring-service`, and
+`intake-service` log groups for the 15-minute test window — zero error events
+across all three.
+
+**Status: education + period schema verified end-to-end against real AWS
+(save/read round-trip, embedding-cache correctness, generation, and free-text
+extraction). Awaiting user's own manual pass before marking done in `PLAN.md`.**
+
+---
+
 ## `intake-service` (`POST /profile/parse`)
 
 Deployed as part of the frontend-integration work — turns free-form prose into

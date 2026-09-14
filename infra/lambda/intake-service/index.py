@@ -48,6 +48,12 @@ def response(status_code, body):
     }
 
 
+def log_bedrock_usage(operation, **fields):
+    """See profile-service's log_bedrock_usage — same convention, filter with:
+    fields @message | filter @message like /BEDROCK_USAGE/"""
+    print("BEDROCK_USAGE " + json.dumps({"service": "intake-service", "operation": operation, **fields}))
+
+
 def strip_code_fence(text):
     """LLMs commonly wrap JSON output in a ```json ... ``` markdown fence even
     when told to respond with ONLY JSON. Strip one if present before parsing."""
@@ -64,6 +70,13 @@ def parse_profile_text(raw_text):
         system=[{"text": SYSTEM_PROMPT}],
         messages=[{"role": "user", "content": [{"text": raw_text}]}],
         inferenceConfig={"maxTokens": 2048, "temperature": 0.2},
+    )
+    usage = resp.get("usage", {})
+    log_bedrock_usage(
+        "parse_profile",
+        model="claude-haiku-4.5",
+        input_tokens=usage.get("inputTokens"),
+        output_tokens=usage.get("outputTokens"),
     )
     raw_output = resp["output"]["message"]["content"][0]["text"]
     return json.loads(strip_code_fence(raw_output))
