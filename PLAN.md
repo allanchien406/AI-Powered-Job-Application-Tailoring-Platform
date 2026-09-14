@@ -461,6 +461,12 @@ one Claude call. Chosen shape:
 - Output is coerced to exactly the `PUT /profile` schema (empty entries
   dropped, trimmed, `company` left blank when no employer named).
 
+## Voice interview agent — 🚧 decided, not yet built
+
+Full spec (product decisions, architecture, phased interview flow, constraints,
+deferred items, verification approach) tracked in **`VOICE_INTERVIEW.md`**. Status
+markers update here; design detail lives in that file.
+
 ## Future improvements — 📝 noted, not started
 
 User-proposed, captured here for later. Not designed or scoped yet.
