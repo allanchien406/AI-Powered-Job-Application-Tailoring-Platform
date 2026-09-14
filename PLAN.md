@@ -400,7 +400,7 @@ CloudWatch logs clean on both `profile-service` and `tailoring-service`.
 
 **Next up: frontend ↔ backend integration** — see the section below.
 
-## Measuring cost per user — ✅ logging implemented, pricing lookup still manual
+## Measuring cost per user — ✅ implemented and calculated
 
 Prompted by wanting to know what a brand-new user costs from signup to a
 generated CV. Two things had to be separated: knowing *how many tokens* each
@@ -428,15 +428,31 @@ Bedrock console's own model page for current per-token rates).
   Measured real tokens for that run: Titan calls at 10–16 input tokens each;
   Claude Haiku calls at 420/138 and 407/122 input/output tokens
   respectively.
-- **What's still manual:** multiplying those real counts by the current
-  per-token price. That number should come from the Bedrock console
-  directly (account/region-specific, always current) rather than a value
-  fetched here — see `TESTING.md` for why the automated lookup wasn't
-  trustworthy enough to hand over a dollar figure.
+- **The calculation:** the user supplied Anthropic's current first-party
+  pricing table (Claude Haiku 4.5: $1.00/1M input tokens, $5.00/1M output
+  tokens). Applying it to the two real Claude Haiku calls measured above:
+  - `/profile/parse`: 420×$0.000001 + 138×$0.000005 = **$0.00111**
+  - `/tailor-generate`: 407×$0.000001 + 122×$0.000005 = **$0.001017**
+  - **Claude Haiku subtotal: ≈ $0.00213 per new user.**
+  - Titan Embed V2 isn't in that table (it's an Amazon model, not Anthropic)
+    and wasn't priced here — but the three real embedding calls totaled only
+    37 input tokens against 1,087 Claude tokens, so at any plausible
+    embedding rate its contribution is a rounding error on top of the
+    Claude figure above.
+  - **Caveat:** the supplied table is Anthropic's *first-party API* pricing.
+    This app calls Claude Haiku 4.5 through *Amazon Bedrock*, which AWS
+    describes as separately/partner-priced — Bedrock's on-demand rate has
+    historically tracked the first-party price for Claude models, but that
+    wasn't independently confirmed for Haiku 4.5 on Bedrock specifically.
+    Cost Explorer / the Bedrock console pricing tab remain the way to get an
+    exact-not-probable number.
+  - **At the 1000-user scale `PRODUCTION.md` targets:** ≈$2.13 in Claude
+    spend for 1000 users to each complete onboarding once — confirms Bedrock
+    cost was never the bottleneck at that scale; the real constraints are
+    the ones already tracked in `PRODUCTION.md` (auth, throttling, storage).
 - Verified locally (20 checks against mocked Bedrock responses, confirming
   the embedding cache still skips unchanged entries — logging added zero new
-  Bedrock calls) and against real AWS (see `TESTING.md`). Pending the user's
-  own manual confirmation before this is marked fully done.
+  Bedrock calls) and against real AWS (see `TESTING.md`).
 
 ## Frontend ↔ backend integration — 🚧 in progress
 
