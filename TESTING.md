@@ -10,13 +10,26 @@ API base URL `https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com`.
 
 ---
 
-## `BEDROCK_USAGE` logging (all four Lambdas)
+## Measuring cost per user (`BEDROCK_USAGE` logging, all four Lambdas)
 
-Added to answer "what does a brand-new user cost us from signup to a
-generated CV" (see `PLAN.md`) — every Bedrock call site now prints one
-structured log line with the real input/output token counts from that
-call's own response (Titan's `inputTextTokenCount`, Converse's
-`usage.inputTokens`/`outputTokens`), instead of estimating.
+**Why:** wanted to know what a brand-new user costs us, from signup to a
+generated CV. Two things had to be separated: knowing *how many tokens*
+each step actually uses (solvable in-app) and knowing the *current price
+per token* for Claude Haiku 4.5 / Titan Embed V2 on Bedrock (not solvable
+reliably by fetching it — the public Bedrock pricing page is JS-rendered and
+the AWS Price List API's `model` attribute doesn't yet index these newer
+models; the reliable sources are AWS Cost Explorer, filtered to Bedrock, for
+what's already been spent, and the Bedrock console's own model page for
+current per-token rates).
+
+**What was built:** every Bedrock call site in all four Lambdas
+(`profile-service`, `job-service`, `intake-service`, `tailoring-service`)
+now prints one structured `BEDROCK_USAGE {...}` log line per call, carrying
+the real token counts already present in that call's own response — Titan's
+`inputTextTokenCount`, Converse's `usage.inputTokens`/`outputTokens` —
+instead of an estimate. Purely additive; no behavior change. Filter in
+CloudWatch Logs Insights with: `fields @message | filter @message like
+/BEDROCK_USAGE/`.
 
 **Local (mocked Bedrock, no AWS calls) — 20 checks, all pass:** correct log
 shape/fields per service; real token counts from the mocked response flow
@@ -25,11 +38,24 @@ before — for 2 profile entries where 1 was unchanged, only 1 Bedrock call
 (and 1 log line) was made, confirming the logging didn't accidentally make
 `attach_embeddings` re-embed unchanged entries.
 
-**Real AWS — full onboarding journey**, test email
-`usage.log.test@example.com` (deleted from DynamoDB after): `POST
-/profile/parse` → `PUT /profile` → `PUT /job-description` → `POST
-/tailor-generate`. All four calls succeeded; CloudWatch Logs Insights (filter
-`BEDROCK_USAGE`) showed exactly one line per Bedrock call, with real numbers:
+### Run 1 — simple profile
+
+Full onboarding journey, test email `usage.log.test@example.com` (deleted
+from DynamoDB after): `POST /profile/parse` → `PUT /profile` → `PUT
+/job-description` → `POST /tailor-generate`.
+
+**Test data:**
+- Pasted text: *"I am Jordan Lee, a backend engineer. I worked at Nimbus
+  Software from 2021 to 2024 building Python services on AWS. I also built
+  a side project called Budget Tracker in 2023."*
+- Resulting profile: 1 experience entry (Backend Engineer @ Nimbus
+  Software), 1 project (Budget Tracker), 0 education, 2 skills.
+- Job description: "Backend Software Engineer" @ "Vertex Analytics" —
+  *"We need a backend engineer experienced with Python and AWS to build
+  cloud services."* (short, one sentence)
+
+All four calls succeeded; CloudWatch Logs Insights showed exactly one line
+per Bedrock call, with real numbers:
 
 | Call | Model | Input tokens | Output tokens |
 |---|---|---|---|
@@ -39,30 +65,61 @@ before — for 2 profile entries where 1 was unchanged, only 1 Bedrock call
 | `POST /profile/parse` → structure the pasted text | Claude Haiku 4.5 | 420 | 138 |
 | `POST /tailor-generate` → generate the CV | Claude Haiku 4.5 | 407 | 122 |
 
-Zero CloudWatch error events across all four services during the test
-window. This gives a real, measured baseline for one new user's onboarding
-cost — multiply by the current per-token price on the Bedrock console (not
-guessed here — see `PLAN.md`) rather than estimating token counts.
+Zero CloudWatch error events across all four services.
 
-Applying the user-supplied Anthropic pricing table (Claude Haiku 4.5:
-$1.00/$5.00 per 1M input/output tokens) to the Claude calls above: **≈
-$0.00213 per new user** (see `PLAN.md` → "Measuring cost per user" for the
-full breakdown and the Bedrock-vs-first-party pricing caveat).
-
-**Status: usage logging verified end-to-end against real AWS. Purely
-additive (no behavior change) — now in active use across two real test runs
-(this one and the richer run below); no explicit "I confirm" from the user
-yet, but the output has been reviewed and built on directly (the cost
-calculation below).**
-
-### Second run — richer profile, longer JD (scaling check)
+### Run 2 — richer profile, longer JD (scaling check)
 
 Same flow, deliberately heavier input to see how cost scales: test email
-`richer.test@example.com` (deleted after), profile parsed from a paragraph
-describing **4 experience entries, 3 projects, 2 education entries, 16
-skills** (plus two hobbies — soccer coaching, woodworking — both correctly
-excluded from the extraction), against a **1928-character** job description
-(Senior SRE role, multi-section: responsibilities/requirements/nice-to-have).
+`richer.test@example.com` (deleted after).
+
+**Test data — pasted text for `POST /profile/parse`:**
+```
+I'm Sarah Mitchell, a backend and infrastructure engineer with about 8 years
+of experience. Most recently I've been a Senior Backend Engineer at Cascade
+Systems from 2022 to now, where I lead a team building payment processing
+APIs in Python and Go, handling around 2 million transactions a day, and I
+migrated our monolith to a microservices architecture on Kubernetes. Before
+that, I was a DevOps Engineer at Meridian Health from 2019 to 2022, where I
+built CI/CD pipelines with Jenkins and GitHub Actions, managed Terraform
+infrastructure across AWS and GCP, and set up Prometheus/Grafana monitoring
+for a HIPAA-compliant environment. From 2017 to 2019 I worked as a Software
+Engineer at Quill Data, a small startup, building their initial REST API in
+Node.js and setting up their first PostgreSQL database schema. My very first
+job out of school was a one-year contract as a Junior Developer at Fenwick
+Consulting in 2016, mostly writing internal tooling scripts in Python.
+
+On the side, I've built a few things: a self-hosted budget tracking app
+called Ledgerline using React and a Django backend, which I've maintained
+since 2021; an open-source Terraform module for provisioning multi-region
+DynamoDB tables that's gotten a few hundred GitHub stars, built in 2023; and
+back in 2018 I built a Discord bot for a gaming community that did automated
+tournament bracket scheduling.
+
+I have a Bachelor's in Computer Science from Riverside State University,
+2013 to 2017. I also did an AWS Solutions Architect certification course
+through a community college in 2020, no formal degree, just a certificate.
+
+Skills: Python, Go, Node.js, Kubernetes, Docker, Terraform, AWS, GCP,
+Jenkins, GitHub Actions, PostgreSQL, DynamoDB, Prometheus, Grafana, React,
+Django.
+
+Outside of work I coach a youth soccer team on weekends, and I'm into
+woodworking as a hobby.
+```
+
+Parsed into **4 experience entries, 3 projects, 2 education entries, 16
+skills** — the two hobbies (soccer coaching, woodworking) were correctly
+excluded from the extraction.
+
+**Test data — job description for `PUT /job-description`:**
+```json
+{
+  "company_name": "Northbeam Cloud",
+  "job_title": "Senior Site Reliability Engineer",
+  "raw_description": "Northbeam Cloud is looking for a Senior Site Reliability Engineer to join our Platform team. We run a multi-region, multi-cloud infrastructure serving millions of API requests per day, and reliability is core to our business.\n\nWhat you'll do:\n- Design, build, and operate highly available distributed systems across AWS and GCP\n- Own our Kubernetes platform: cluster upgrades, autoscaling, cost optimization, and security hardening\n- Build and maintain CI/CD pipelines that let product teams ship safely and frequently\n- Define and track SLOs/SLIs for critical services, and lead incident response and postmortems\n- Write infrastructure as code (Terraform) and drive infrastructure toward full automation\n- Build observability tooling (metrics, logging, tracing) so engineers can debug production issues quickly\n- Partner with backend teams on capacity planning, performance tuning, and architecture reviews\n- Mentor other engineers on operational best practices\n\nWhat we're looking for:\n- 5+ years of experience in an SRE, DevOps, or backend infrastructure role\n- Deep hands-on experience with Kubernetes in production\n- Strong scripting/programming ability in Python and/or Go\n- Experience with infrastructure as code, ideally Terraform\n- Experience with CI/CD tooling (GitHub Actions, Jenkins, or similar)\n- Solid understanding of networking, Linux systems, and distributed systems fundamentals\n- Experience with monitoring/observability stacks like Prometheus and Grafana\n- Comfortable being on an on-call rotation and leading incident response\n\nNice to have:\n- Experience operating databases at scale (PostgreSQL, DynamoDB, or similar)\n- Experience in a regulated or compliance-heavy environment (HIPAA, SOC 2, PCI)\n- Contributions to open-source infrastructure tooling\n- Multi-cloud experience (AWS + GCP or Azure)\n\nWhat we offer: competitive salary, equity, fully remote work, unlimited PTO, and a home office stipend."
+}
+```
+1928 characters — multi-section (responsibilities / requirements / nice-to-have / benefits).
 
 **Match quality:** 3 of 4 experience entries scored above
 `MIN_SEMANTIC_SCORE` (DevOps Engineer 0.466, Senior Backend Engineer 0.395,
@@ -83,16 +140,45 @@ errors across all four services.
 | `POST /profile/parse` | Claude Haiku 4.5 | 824 | 675 |
 | `POST /tailor-generate` | Claude Haiku 4.5 | 1142 | 480 |
 
-**Cost at the same Haiku 4.5 rate:** 1966×$0.000001 + 1155×$0.000005 ≈
-**$0.00774** — about **3.6× the simple-profile run's $0.00213**, driven
-mostly by output tokens: a richer profile produces a longer structured
-extraction, and more matched entries + a longer JD produce a longer
-generated CV. Titan's contribution stays negligible in both runs (37 tokens
-vs. 569 tokens — still a rounding error next to ~2,000 Claude tokens).
+### Cost comparison
 
-**Status: cost-scaling behavior verified against real AWS — cost grows with
-profile/JD size roughly as expected, dominated by Claude Haiku output
-tokens, not Titan embedding calls.**
+Pricing applied: the user-supplied Anthropic first-party table for Claude
+Haiku 4.5 ($1.00 / $5.00 per 1M input/output tokens). Titan Embed V2 isn't
+in that table (it's an Amazon model, not Anthropic) and wasn't priced here —
+but its token volume is a rounding error next to Claude's in both runs
+(37 vs. 569 tokens, against ~1,100–2,000 Claude tokens), so leaving it out
+doesn't materially change either total.
+
+| Run | Profile size | JD size | Claude tokens (in/out) | Cost |
+|---|---|---|---|---|
+| 1 — simple | 1 experience, 1 project | ~90 chars | 827 / 260 | **≈ $0.00213** |
+| 2 — richer | 4 experience, 3 projects, 2 education, 16 skills | 1928 chars | 1966 / 1155 | **≈ $0.00774** |
+
+Run 2 cost **≈3.6×** Run 1 — driven almost entirely by output tokens: a
+richer profile makes for a longer structured extraction, and more matched
+entries plus a longer JD make for a longer generated CV. Cost per user isn't
+a single number — it's bounded below by a sparse profile (~$0.002) and
+grows with how much career history and JD detail a real user provides. At
+the 1000-user scale `PRODUCTION.md` targets, that's roughly **$2–8** in
+Claude spend for 1000 users to each complete onboarding once, depending on
+how much they write — confirming Bedrock cost isn't the bottleneck at that
+scale; the real constraints are the ones already tracked in `PRODUCTION.md`
+(auth, throttling, storage).
+
+**Caveat:** the pricing table used is Anthropic's *first-party API*
+pricing. This app calls Claude Haiku 4.5 through *Amazon Bedrock*, which AWS
+describes as separately/partner-priced — Bedrock's on-demand rate has
+historically tracked the first-party price for Claude models, but that
+wasn't independently confirmed for Haiku 4.5 on Bedrock specifically. Cost
+Explorer / the Bedrock console pricing tab remain the way to get an
+exact-not-probable number.
+
+**Status: usage logging verified end-to-end against real AWS across two
+runs of different scale (simple and richer). Purely additive (no behavior
+change). Cost-scaling behavior confirmed: dominated by Claude Haiku output
+tokens, not Titan embedding calls. No explicit "I confirm" from the user
+yet, but the output has been reviewed and built on directly (the cost
+calculations above).**
 
 ---
 

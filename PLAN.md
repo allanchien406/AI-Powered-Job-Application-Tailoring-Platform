@@ -400,74 +400,18 @@ CloudWatch logs clean on both `profile-service` and `tailoring-service`.
 
 **Next up: frontend ↔ backend integration** — see the section below.
 
-## Measuring cost per user — ✅ implemented and calculated
+## Bedrock usage logging — ✅ implemented
 
-Prompted by wanting to know what a brand-new user costs from signup to a
-generated CV. Two things had to be separated: knowing *how many tokens* each
-step actually uses (solvable in-app), and knowing the *current price per
-token* for Claude Haiku 4.5 / Titan Embed V2 on Bedrock (not solvable
-reliably from here — the public Bedrock pricing page is JS-rendered and the
-AWS Price List API's `model` attribute doesn't yet index these newer models,
-so neither could be fetched with confidence; the reliable sources are AWS
-Cost Explorer, filtered to Bedrock, for what's already been spent, and the
-Bedrock console's own model page for current per-token rates).
-
-- **What was built:** every Bedrock call site in all four Lambdas
-  (`profile-service`, `job-service`, `intake-service`, `tailoring-service`)
-  now emits one `BEDROCK_USAGE {...}` log line per call, carrying the real
-  token counts already present in that call's own response — Titan's
-  `inputTextTokenCount`, Converse's `usage.inputTokens`/`outputTokens` —
-  rather than an estimate. Purely additive; no behavior change. Filter in
-  CloudWatch Logs Insights with `fields @message | filter @message like
-  /BEDROCK_USAGE/`.
-- **The exact call sequence for one new user**, confirmed by a real run (see
-  `TESTING.md`): `POST /profile/parse` (1× Claude Haiku), `PUT /profile` (1×
-  Titan per new/changed experience or project entry — 2 in the test run),
-  `PUT /job-description` (1× Titan), `POST /tailor-generate` (1× Claude
-  Haiku, 0 Titan calls since the JD and profile entries are already cached).
-  Measured real tokens for that run: Titan calls at 10–16 input tokens each;
-  Claude Haiku calls at 420/138 and 407/122 input/output tokens
-  respectively.
-- **The calculation:** the user supplied Anthropic's current first-party
-  pricing table (Claude Haiku 4.5: $1.00/1M input tokens, $5.00/1M output
-  tokens). Applying it to the two real Claude Haiku calls measured above:
-  - `/profile/parse`: 420×$0.000001 + 138×$0.000005 = **$0.00111**
-  - `/tailor-generate`: 407×$0.000001 + 122×$0.000005 = **$0.001017**
-  - **Claude Haiku subtotal: ≈ $0.00213 per new user.**
-  - Titan Embed V2 isn't in that table (it's an Amazon model, not Anthropic)
-    and wasn't priced here — but the three real embedding calls totaled only
-    37 input tokens against 1,087 Claude tokens, so at any plausible
-    embedding rate its contribution is a rounding error on top of the
-    Claude figure above.
-  - **Caveat:** the supplied table is Anthropic's *first-party API* pricing.
-    This app calls Claude Haiku 4.5 through *Amazon Bedrock*, which AWS
-    describes as separately/partner-priced — Bedrock's on-demand rate has
-    historically tracked the first-party price for Claude models, but that
-    wasn't independently confirmed for Haiku 4.5 on Bedrock specifically.
-    Cost Explorer / the Bedrock console pricing tab remain the way to get an
-    exact-not-probable number.
-  - **At the 1000-user scale `PRODUCTION.md` targets:** ≈$2.13 in Claude
-    spend for 1000 users to each complete onboarding once — confirms Bedrock
-    cost was never the bottleneck at that scale; the real constraints are
-    the ones already tracked in `PRODUCTION.md` (auth, throttling, storage).
-- **Cost scales with profile/JD size, not just call count** — confirmed with
-  a second real run: a richer profile (4 experience, 3 projects, 2
-  education, 16 skills) against a long, detailed JD (1928 chars) cost
-  **≈$0.00774**, about 3.6× the simple-profile run — driven almost entirely
-  by output tokens (a bigger profile makes for a longer structured
-  extraction; more matched entries + a longer JD make for a longer generated
-  CV). Titan embedding cost stayed a rounding error in both runs (37 tokens
-  vs. 569 tokens, against ~2,000 Claude tokens). Match quality held up too:
-  3 of 4 experience entries and 1 of 3 projects scored above
-  `MIN_SEMANTIC_SCORE`, correctly dropping the weakest-fit entries, with no
-  hallucinated employer. Full breakdown in `TESTING.md`. This means "cost
-  per user" isn't a single number — it's bounded below by a sparse profile
-  (~$0.002) and grows with how much career history and JD detail a real
-  user actually provides.
-- Verified locally (20 checks against mocked Bedrock responses, confirming
-  the embedding cache still skips unchanged entries — logging added zero new
-  Bedrock calls) and against real AWS across two runs of different scale
-  (see `TESTING.md`).
+Every Bedrock call site in all four Lambdas (`profile-service`,
+`job-service`, `intake-service`, `tailoring-service`) prints one structured
+`BEDROCK_USAGE {...}` log line per call, carrying the real input/output
+token counts already present in that call's own response (Titan's
+`inputTextTokenCount`, Converse's `usage.inputTokens`/`outputTokens`) rather
+than an estimate. Purely additive — no behavior change. Filter in
+CloudWatch Logs Insights with `fields @message | filter @message like
+/BEDROCK_USAGE/`. Built to answer "what does a new user cost us" without
+guessing token counts; the test runs, the resulting cost-per-user
+calculations, and the pricing caveats live in `TESTING.md`, not here.
 
 ## Frontend ↔ backend integration — 🚧 in progress
 
