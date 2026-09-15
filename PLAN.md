@@ -120,6 +120,18 @@ item without specifying whose partition to read from.
   0.10 number comes from a real test (see "Threshold calibration" below), not
   a guess — it started life as "no threshold at all" until there was data to
   set one from.
+- ✅ **Fixed: matched projects were silently dropped from `generated_cv`.**
+  The generation system prompt's output schema only ever declared an
+  `experience` array — no `projects` field — and nothing told the model to
+  fold `matched_projects` into it, so the model reasonably treated
+  `experience` as corresponding only to `matched_experiences` and dropped
+  every project. Fixed by adding an explicit instruction: merge every entry
+  from both `matched_projects` and `matched_experiences` into the single
+  `experience` array (projects still get `"company": "Not specified"`, per
+  the existing rule). Verified against the real deployed endpoint: before
+  the fix, 3 real matched projects (cosine scores 0.208/0.146/0.13) never
+  appeared in `generated_cv.experience`; after, all 4 entries (1 experience
+  + 3 projects) appear.
 - **`skills` is not an independent matching signal.** There's no
   `match_skills`/skill embedding at all, in either route. Reasoning: a skill
   worth matching on should already appear with context inside a project or
@@ -449,6 +461,17 @@ period, State University) rather than fabricating an employer from the target
 company name → reloaded the page and confirmed the saved job list persists
 via `GET /job-description/list`. Zero console errors, zero CloudWatch errors
 across all four Lambdas. See `TESTING.md`.
+
+- ✅ **Regenerate button — added to both the job list and the CV builder.**
+  `JobDescriptionPage`'s `handleGenerate` gained a `force` param that skips
+  the cached-CV short-circuit; a ghost **Regenerate** button next to **View
+  tailored CV** calls it with `force: true`. `CVBuilderPage` gained its own
+  **Regenerate** button next to **Export PDF** that re-runs
+  `generateTailoredCV` for the currently-viewed job and overwrites the
+  cached entry via `saveGeneratedCV` (already an upsert by `jobId`, so no
+  store changes were needed). Both just re-call the existing
+  `/tailor-generate` endpoint — no backend changes. Verified manually in
+  the browser against the live deployed backend.
 
 Still to do: deciding what happens to the stale
 `CVBuilderPage`/`MyCVsPage`/`cvApi.ts`, and (smaller) `/tailor-preview`

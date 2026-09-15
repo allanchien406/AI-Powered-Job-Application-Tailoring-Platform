@@ -4,8 +4,9 @@ import { ModernTemplate } from '../components/ModernTemplate';
 import { CVViewer } from '../components/CVViewer';
 import { Shell } from '../components/Shell';
 import { useCVStore, TailoredCVEntry } from '../store/useCVStore';
-import { Button, PanelCard, SectionTitle } from '../components/ui';
+import { Button, Notice, PanelCard, SectionTitle } from '../components/ui';
 import { exportToPDF } from '../utils/exportPDF';
+import { generateTailoredCV, getProfile } from '../api/backend';
 
 const formatDate = (iso: string) => {
   if (!iso) return 'earlier session';
@@ -18,12 +19,16 @@ const formatDate = (iso: string) => {
 
 export const CVBuilderPage: React.FC = () => {
   const navigate = useNavigate();
+  const email = useCVStore((state) => state.email);
   const cvs = useCVStore((state) => state.cvs);
   const viewerCv = useCVStore((state) => state.viewerCv);
   const viewerJobId = useCVStore((state) => state.viewerJobId);
   const selectCV = useCVStore((state) => state.selectCV);
+  const saveGeneratedCV = useCVStore((state) => state.saveGeneratedCV);
 
   const [exporting, setExporting] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
 
   const sorted = [...cvs].sort((a, b) => b.generatedAt.localeCompare(a.generatedAt));
 
@@ -35,6 +40,24 @@ export const CVBuilderPage: React.FC = () => {
       console.error('Failed to export PDF:', err);
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    if (!viewerJobId) return;
+    const entry = cvs.find((c) => c.jobId === viewerJobId);
+    if (!entry) return;
+
+    setRegenerating(true);
+    setRegenerateError(null);
+    try {
+      const data = await generateTailoredCV(email, viewerJobId);
+      const profile = await getProfile(email).catch(() => null);
+      saveGeneratedCV(profile, data.generated_cv, viewerJobId, entry.jobRef);
+    } catch (e) {
+      setRegenerateError(e instanceof Error ? e.message : 'Something went wrong regenerating this CV.');
+    } finally {
+      setRegenerating(false);
     }
   };
 
@@ -50,10 +73,17 @@ export const CVBuilderPage: React.FC = () => {
                 review and export.
               </div>
             </div>
-            <Button onClick={handleExport} disabled={exporting}>
-              {exporting ? 'Exporting…' : 'Export PDF'}
-            </Button>
+            <div className="flex shrink-0 gap-2">
+              <Button variant="ghost" onClick={handleRegenerate} disabled={regenerating || exporting}>
+                {regenerating ? 'Regenerating…' : 'Regenerate'}
+              </Button>
+              <Button onClick={handleExport} disabled={exporting || regenerating}>
+                {exporting ? 'Exporting…' : 'Export PDF'}
+              </Button>
+            </div>
           </div>
+
+          {regenerateError && <Notice tone="error">{regenerateError}</Notice>}
 
           {cvs.length > 1 && (
             <PanelCard>

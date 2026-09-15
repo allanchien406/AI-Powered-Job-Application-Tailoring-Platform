@@ -149,11 +149,12 @@ export const JobDescriptionPage: React.FC = () => {
     }
   };
 
-  const handleGenerate = async (job: StoredJobDescription) => {
+  const handleGenerate = async (job: StoredJobDescription, force = false) => {
     // A cached CV is only a true match if the job is unchanged since it was
     // tailored — otherwise the cached result would be stale and we regenerate.
+    // `force` skips this short-circuit entirely, for an explicit Regenerate click.
     const cached = getCVForJob(job.job_id);
-    if (cached && isJobRefMatching(cached.jobRef, jobRefOf(job))) {
+    if (!force && cached && isJobRefMatching(cached.jobRef, jobRefOf(job))) {
       selectCV(job.job_id);
       navigate('/builder');
       return;
@@ -317,6 +318,18 @@ export const JobDescriptionPage: React.FC = () => {
                         ? 'View tailored CV'
                         : 'Tailor CV'}
                   </Button>
+                  {canViewCached && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => handleGenerate(job, true)}
+                      disabled={generateState?.jobId === job.job_id && generateState.status === 'generating'}
+                      className="whitespace-nowrap"
+                    >
+                      {generateState?.jobId === job.job_id && generateState.status === 'generating'
+                        ? 'Regenerating…'
+                        : 'Regenerate'}
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
