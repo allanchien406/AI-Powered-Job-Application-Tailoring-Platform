@@ -100,6 +100,27 @@ def log_bedrock_usage(operation, **fields):
     print("BEDROCK_USAGE " + json.dumps({"service": "tailoring-service", "operation": operation, **fields}))
 
 
+def log_semantic_score(label, field, score, dropped):
+    """Debug log for evaluating /tailor-generate's embedding scoring — logs
+    every entry's cosine similarity BEFORE the MIN_SEMANTIC_SCORE filter, so
+    dropped entries (invisible in the API response) are still visible here.
+    Filter in CloudWatch with: fields @message | filter @message like /SEMANTIC_SCORE/
+    Remove once scoring is validated — this is temporary debugging, not a
+    permanent operational log."""
+    print("SEMANTIC_SCORE " + json.dumps({"field": field, "label": label, "score": round(score, 3), "dropped": dropped}))
+
+
+def log_prompt(system_prompt, user_message):
+    """Debug log for evaluating /tailor-generate's output quality — logs the
+    exact system + user prompt sent to Bedrock, so it doesn't have to be
+    reconstructed from prompt_context in the API response by hand.
+    Filter in CloudWatch with: fields @message | filter @message like /PROMPT_DEBUG/
+    Remove once prompt quality is validated — this is temporary debugging,
+    not a permanent operational log (and logs candidate PII, unlike
+    BEDROCK_USAGE/SEMANTIC_SCORE)."""
+    print("PROMPT_DEBUG " + json.dumps({"system_prompt": system_prompt, "user_message": user_message}))
+
+
 def profiles_table():
     return dynamodb.Table(os.environ["PROFILES_TABLE_NAME"])
 
@@ -366,9 +387,11 @@ def score_entries_with_semantics(entries, jd_vector, title_field, description_fi
             entry_vector = safe_embed_text(f"{title_text} {description_text}", title_text or "(unnamed entry)")
             embedding_failed = entry_vector is None
         semantic_score = cosine_similarity(jd_vector, entry_vector) if entry_vector else 0.0
+        dropped = not embedding_failed and semantic_score < MIN_SEMANTIC_SCORE
+        log_semantic_score(title_text or "(untitled entry)", title_field, semantic_score, dropped)
 
         # Drop noise — but not an entry we simply couldn't embed.
-        if not embedding_failed and semantic_score < MIN_SEMANTIC_SCORE:
+        if dropped:
             continue
 
         scored_entry = {
@@ -460,6 +483,9 @@ def call_bedrock_for_tailoring(prompt_context):
         '{"title": string, "summary": string, '
         '"experience": [{"company": string, "role": string, "period": string, "description": string}], '
         '"education": [{"institution": string, "degree": string, "period": string}]}. '
+        "There is no separate output field for projects — merge EVERY entry from both "
+        "matched_projects and matched_experiences into the single \"experience\" array above. "
+        "Do not omit any matched project or matched experience entry. "
         "Only use facts present in the candidate's matched projects, experience, and "
         "education below — do not invent employers, institutions, degrees, dates, or "
         "achievements that are not present in the input. "
@@ -473,10 +499,13 @@ def call_bedrock_for_tailoring(prompt_context):
         "an empty array if they gave none."
     )
 
+    user_message = json.dumps(prompt_context)
+    log_prompt(system_prompt, user_message)
+
     resp = bedrock_runtime.converse(
         modelId=os.environ["BEDROCK_MODEL_ID"],
         system=[{"text": system_prompt}],
-        messages=[{"role": "user", "content": [{"text": json.dumps(prompt_context)}]}],
+        messages=[{"role": "user", "content": [{"text": user_message}]}],
         inferenceConfig={"maxTokens": 1024, "temperature": 0.4},
     )
     usage = resp.get("usage", {})
