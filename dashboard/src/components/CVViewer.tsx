@@ -11,7 +11,6 @@ export const CVViewer: React.FC = () => {
     <div className="w-[360px] min-w-[320px] self-start rounded-xl border border-sand bg-white p-[18px] shadow-card">
       <Section>Basics</Section>
       <Row label="Name">{cv.name}</Row>
-      <Row label="Title">{cv.title}</Row>
       <Row label="Email">{cv.email}</Row>
 
       <Section>Target job</Section>
