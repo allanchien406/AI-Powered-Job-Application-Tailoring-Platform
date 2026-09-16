@@ -473,6 +473,34 @@ across all four Lambdas. See `TESTING.md`.
   `/tailor-generate` endpoint — no backend changes. Verified manually in
   the browser against the live deployed backend.
 
+- ✅ **CV template picker — Modern, Classic, and Embedded.** New
+  `components/templates.ts` registry (`{id, label, component}`) plus
+  `getTemplate`/`DEFAULT_TEMPLATE_ID`; `CVBuilderPage` renders a template
+  picker row above the preview, `useCVStore` gained per-CV `templateId`
+  (preserved across Regenerate) and a `setTemplate(jobId, templateId)`
+  action, and `CVPreview`/`JobDescriptionPage`'s job-list thumbnail now
+  render whichever template is chosen instead of hardcoding
+  `ModernTemplate`. `ClassicTemplate` is a deliberate placeholder stub
+  (guidance comment only, not a real design). `EmbeddedTemplate` needed
+  `CVData` to grow: `EntrySection` (shared `{id, title, org?, period?,
+  bullets}` type), `education[].coursework`, and optional
+  `projects`/`research`/`additional`/`referencesNote`. `projects`/`research`
+  are derived in `generatedCvToCVData` by splitting the merged `experience`
+  list on `company === "Not specified"` (a heuristic on the signal from the
+  matched-projects fix above, not a real backend distinction); `additional`
+  and `referencesNote` still have no generator and stay empty/fallback.
+  `education[].coursework` **does** have a real fix: the generation output
+  schema in `tailoring-service` only ever declared `{institution, degree,
+  period}` for education — no field for the `description` (coursework/
+  honors/thesis) that `education_for_prompt` was already forwarding into
+  the prompt — same class of bug as the matched-projects one, just on
+  education instead of experience. Fixed by adding `description` to the
+  output schema with an explicit "copy verbatim or leave empty, never
+  invent" instruction; `GeneratedCV.education` and `generatedCvToCVData`
+  updated to carry it through. Verified against the real deployed
+  endpoint: `generated_cv.education[0].description` now matches the
+  profile's coursework list.
+
 Still to do: deciding what happens to the stale
 `CVBuilderPage`/`MyCVsPage`/`cvApi.ts`, and (smaller) `/tailor-preview`
 (the free keyword-only route) isn't wired into the frontend anywhere yet —

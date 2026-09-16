@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { CVData, JobRef } from '../types';
 import { GeneratedCV, StoredProfile } from '../api/backend';
 import { generatedCvToCVData } from '../utils/cv';
+import { DEFAULT_TEMPLATE_ID } from '../components/templates';
 
 export interface ViewerMeta {
   companyName: string;
@@ -14,6 +15,7 @@ export interface TailoredCVEntry {
   jobRef: JobRef;
   cv: CVData;
   generatedAt: string;
+  templateId: string;
 }
 
 interface AppStore {
@@ -22,12 +24,14 @@ interface AppStore {
   viewerCv: CVData | null;
   viewerMeta: ViewerMeta | null;
   viewerJobId: string | null;
+  viewerTemplateId: string;
 
   login: (email: string) => void;
   logout: () => void;
   saveGeneratedCV: (profile: StoredProfile | null, generated: GeneratedCV, jobId: string, jobRef: JobRef) => void;
   selectCV: (jobId: string) => void;
   getCVForJob: (jobId: string) => TailoredCVEntry | undefined;
+  setTemplate: (jobId: string, templateId: string) => void;
 }
 
 const EMAIL_KEY = 'cv_email';
@@ -45,7 +49,11 @@ interface PersistedDir {
 function loadDir(): PersistedDir {
   try {
     const raw = localStorage.getItem(DIR_STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as PersistedDir;
+    if (raw) {
+      const parsed = JSON.parse(raw) as PersistedDir;
+      // Entries persisted before templateId existed don't have one — default them.
+      return { ...parsed, cvs: parsed.cvs.map((c) => ({ ...c, templateId: c.templateId ?? DEFAULT_TEMPLATE_ID })) };
+    }
   } catch {
     // fall through to migration below
   }
@@ -63,6 +71,7 @@ function loadDir(): PersistedDir {
               jobRef: { company_name: '', job_title: '', raw_description: '' },
               cv: old.viewerCv,
               generatedAt: '',
+              templateId: DEFAULT_TEMPLATE_ID,
             },
           ],
           viewerJobId: '',
@@ -97,6 +106,10 @@ export const useCVStore = create<AppStore>((set, get) => ({
   viewerCv: initial.cvs.find((c) => c.jobId === initial.viewerJobId)?.cv ?? initial.cvs[0]?.cv ?? null,
   viewerMeta: initial.cvs.find((c) => c.jobId === initial.viewerJobId)?.meta ?? initial.cvs[0]?.meta ?? null,
   viewerJobId: initial.cvs.find((c) => c.jobId === initial.viewerJobId)?.jobId ?? initial.cvs[0]?.jobId ?? null,
+  viewerTemplateId:
+    initial.cvs.find((c) => c.jobId === initial.viewerJobId)?.templateId ??
+    initial.cvs[0]?.templateId ??
+    DEFAULT_TEMPLATE_ID,
 
   login: (email) => {
     localStorage.setItem(EMAIL_KEY, email);
@@ -107,31 +120,44 @@ export const useCVStore = create<AppStore>((set, get) => ({
     localStorage.removeItem(EMAIL_KEY);
     localStorage.removeItem(DIR_STORAGE_KEY);
     localStorage.removeItem(OLD_VIEWER_STORAGE_KEY);
-    set({ email: '', cvs: [], viewerCv: null, viewerMeta: null, viewerJobId: null });
+    set({ email: '', cvs: [], viewerCv: null, viewerMeta: null, viewerJobId: null, viewerTemplateId: DEFAULT_TEMPLATE_ID });
   },
 
   saveGeneratedCV: (profile, generated, jobId, jobRef) => {
     const cv = generatedCvToCVData(generated, profile);
+    // Regenerating an existing job keeps its previously chosen template
+    // rather than resetting to the default.
+    const existingTemplateId = get().cvs.find((c) => c.jobId === jobId)?.templateId ?? DEFAULT_TEMPLATE_ID;
     const entry: TailoredCVEntry = {
       jobId,
       meta: { companyName: jobRef.company_name, jobTitle: jobRef.job_title },
       jobRef,
       cv,
       generatedAt: new Date().toISOString(),
+      templateId: existingTemplateId,
     };
     const cvs = get().cvs.some((c) => c.jobId === jobId)
       ? get().cvs.map((c) => (c.jobId === jobId ? entry : c))
       : [...get().cvs, entry];
     persist({ cvs, viewerJobId: jobId });
-    set({ cvs, viewerCv: entry.cv, viewerMeta: entry.meta, viewerJobId: jobId });
+    set({ cvs, viewerCv: entry.cv, viewerMeta: entry.meta, viewerJobId: jobId, viewerTemplateId: entry.templateId });
   },
 
   selectCV: (jobId) => {
     const entry = get().cvs.find((c) => c.jobId === jobId);
     if (!entry) return;
     persist({ cvs: get().cvs, viewerJobId: jobId });
-    set({ viewerCv: entry.cv, viewerMeta: entry.meta, viewerJobId: jobId });
+    set({ viewerCv: entry.cv, viewerMeta: entry.meta, viewerJobId: jobId, viewerTemplateId: entry.templateId });
   },
 
   getCVForJob: (jobId) => get().cvs.find((c) => c.jobId === jobId),
+
+  setTemplate: (jobId, templateId) => {
+    const cvs = get().cvs.map((c) => (c.jobId === jobId ? { ...c, templateId } : c));
+    persist({ cvs, viewerJobId: get().viewerJobId });
+    set({
+      cvs,
+      viewerTemplateId: jobId === get().viewerJobId ? templateId : get().viewerTemplateId,
+    });
+  },
 }));

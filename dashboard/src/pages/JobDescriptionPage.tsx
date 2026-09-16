@@ -347,6 +347,7 @@ export const JobDescriptionPage: React.FC = () => {
                 generatedCv={result.generatedCv}
                 job={job}
                 profile={profile}
+                templateId={getCVForJob(job.job_id)?.templateId}
                 onOpen={() => handleOpenInEditor(job)}
               />
             )}
@@ -403,8 +404,9 @@ const GeneratedResult: React.FC<{
   generatedCv: GeneratedCV;
   job: StoredJobDescription;
   profile: StoredProfile | null;
+  templateId?: string;
   onOpen: () => void;
-}> = ({ generatedCv, job, profile, onOpen }) => {
+}> = ({ generatedCv, job, profile, templateId, onOpen }) => {
   const cvData = generatedCvToCVData(generatedCv, profile);
 
   return (
@@ -416,7 +418,7 @@ const GeneratedResult: React.FC<{
         </div>
       </div>
 
-      <CVPreview cv={cvData} />
+      <CVPreview cv={cvData} templateId={templateId} />
 
       <div className="mt-3 text-center">
         <Button onClick={onOpen}>Open full CV with details →</Button>

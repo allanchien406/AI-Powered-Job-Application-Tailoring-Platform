@@ -1,12 +1,17 @@
 import React from 'react';
 import { CVData } from '../types';
-import { ModernTemplate } from './ModernTemplate';
+import { DEFAULT_TEMPLATE_ID, getTemplate } from './templates';
 
-/** A print-grade, scaled-down render of the full A4 ModernTemplate — used as
+/** A print-grade, scaled-down render of the full A4 template — used as
  * the "here's your finished CV" preview instead of a text dump. */
-export const CVPreview: React.FC<{ cv: CVData; scale?: number }> = ({ cv, scale = 0.35 }) => {
+export const CVPreview: React.FC<{ cv: CVData; scale?: number; templateId?: string }> = ({
+  cv,
+  scale = 0.35,
+  templateId = DEFAULT_TEMPLATE_ID,
+}) => {
   const widthMm = Math.round(210 * scale * 10) / 10;
   const heightMm = Math.round(297 * scale * 10) / 10;
+  const Template = getTemplate(templateId).component;
 
   return (
     <div
@@ -21,7 +26,7 @@ export const CVPreview: React.FC<{ cv: CVData; scale?: number }> = ({ cv, scale 
           height: '297mm',
         }}
       >
-        <ModernTemplate cv={cv} />
+        <Template cv={cv} />
       </div>
     </div>
   );

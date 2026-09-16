@@ -482,7 +482,7 @@ def call_bedrock_for_tailoring(prompt_context):
         "Respond with ONLY valid JSON matching this schema: "
         '{"title": string, "summary": string, '
         '"experience": [{"company": string, "role": string, "period": string, "description": string}], '
-        '"education": [{"institution": string, "degree": string, "period": string}]}. '
+        '"education": [{"institution": string, "degree": string, "period": string, "description": string}]}. '
         "There is no separate output field for projects — merge EVERY entry from both "
         "matched_projects and matched_experiences into the single \"experience\" array above. "
         "Do not omit any matched project or matched experience entry. "
@@ -496,7 +496,9 @@ def call_bedrock_for_tailoring(prompt_context):
         'target_role.company_name as an experience entry\'s "company" — that is the job the '
         "candidate is applying TO, not somewhere they have worked. "
         "Include every education entry from the candidate's data; leave \"education\" as "
-        "an empty array if they gave none."
+        "an empty array if they gave none. Each education entry's \"description\" field "
+        "(coursework, honors, thesis) must be copied verbatim from the candidate's data if "
+        "given, or an empty string if not — never invent or paraphrase one."
     )
 
     user_message = json.dumps(prompt_context)

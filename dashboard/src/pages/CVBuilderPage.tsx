@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ModernTemplate } from '../components/ModernTemplate';
 import { CVViewer } from '../components/CVViewer';
 import { Shell } from '../components/Shell';
 import { useCVStore, TailoredCVEntry } from '../store/useCVStore';
 import { Button, Notice, PanelCard, SectionTitle } from '../components/ui';
 import { exportToPDF } from '../utils/exportPDF';
 import { generateTailoredCV, getProfile } from '../api/backend';
+import { TEMPLATES, getTemplate } from '../components/templates';
 
 const formatDate = (iso: string) => {
   if (!iso) return 'earlier session';
@@ -23,8 +23,10 @@ export const CVBuilderPage: React.FC = () => {
   const cvs = useCVStore((state) => state.cvs);
   const viewerCv = useCVStore((state) => state.viewerCv);
   const viewerJobId = useCVStore((state) => state.viewerJobId);
+  const viewerTemplateId = useCVStore((state) => state.viewerTemplateId);
   const selectCV = useCVStore((state) => state.selectCV);
   const saveGeneratedCV = useCVStore((state) => state.saveGeneratedCV);
+  const setTemplate = useCVStore((state) => state.setTemplate);
 
   const [exporting, setExporting] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
@@ -116,11 +118,33 @@ export const CVBuilderPage: React.FC = () => {
             </PanelCard>
           )}
 
+          <div className="mb-3 flex items-center gap-2">
+            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-muted">Template</span>
+            {TEMPLATES.map((template) => {
+              const selected = template.id === viewerTemplateId;
+              return (
+                <button
+                  key={template.id}
+                  type="button"
+                  onClick={() => viewerJobId && setTemplate(viewerJobId, template.id)}
+                  className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                    selected ? 'border-forest bg-forest/[0.06] text-forest' : 'border-sand bg-white text-ink-soft hover:border-forest/50'
+                  }`}
+                >
+                  {template.label}
+                </button>
+              );
+            })}
+          </div>
+
           <div className="flex items-start gap-6">
             <CVViewer />
             <div className="flex flex-1 justify-center">
               <div id="cv-preview">
-                <ModernTemplate cv={viewerCv} />
+                {(() => {
+                  const SelectedTemplate = getTemplate(viewerTemplateId).component;
+                  return <SelectedTemplate cv={viewerCv} />;
+                })()}
               </div>
             </div>
           </div>

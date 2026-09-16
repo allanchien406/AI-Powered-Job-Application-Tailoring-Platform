@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { CVData, JobRef } from '../types';
+import { CVData, EntrySection, JobRef } from '../types';
 import { GeneratedCV, StoredProfile } from '../api/backend';
 
 /** Map the /tailor-generate response (+ an optional profile for name/skills)
@@ -29,9 +29,28 @@ export function generatedCvToCVData(
       institution: e.institution,
       degree: e.degree,
       period: e.period,
+      coursework: e.description || undefined,
     })),
     skills: profile?.skills ?? [],
     accentColor: '#2c4a3e',
+    // Derived for templates (e.g. EmbeddedTemplate) that want projects and
+    // work/research experience as separate sections instead of one merged
+    // list. tailoring-service merges matched_projects into `experience` with
+    // company: "Not specified" (see PLAN.md's "matched projects were
+    // silently dropped" note) — that's the only signal we have to split on,
+    // so it's a heuristic, not a real distinction the backend makes.
+    projects: generated.experience.filter((e) => e.company === 'Not specified').map(toEntrySection),
+    research: generated.experience.filter((e) => e.company !== 'Not specified').map(toEntrySection),
+  };
+}
+
+function toEntrySection(e: GeneratedCV['experience'][number]): EntrySection {
+  return {
+    id: uuid(),
+    title: e.role,
+    org: e.company === 'Not specified' ? undefined : e.company,
+    period: e.period,
+    bullets: e.description ? [e.description] : [],
   };
 }
 

@@ -151,7 +151,7 @@ export interface GeneratedCV {
   title: string;
   summary: string;
   experience: Array<{ company: string; role: string; period: string; description: string }>;
-  education: Array<{ institution: string; degree: string; period: string }>;
+  education: Array<{ institution: string; degree: string; period: string; description: string }>;
 }
 
 export interface PreviewMatch {
