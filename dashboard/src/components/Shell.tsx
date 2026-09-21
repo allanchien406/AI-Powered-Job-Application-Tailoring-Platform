@@ -45,8 +45,8 @@ export const Shell: React.FC<{ children: React.ReactNode; wide?: boolean }> = ({
             <span className="text-[11px] text-ink-muted">{email}</span>
             <Button
               variant="ghost"
-              onClick={() => {
-                logout();
+              onClick={async () => {
+                await logout();
                 navigate('/');
               }}
             >
