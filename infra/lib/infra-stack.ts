@@ -5,6 +5,7 @@ import { HttpApi } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as cognito from "aws-cdk-lib/aws-cognito";
 
 // Verify these against the Bedrock console's model catalog for your account/region
 // before deploying — Bedrock model IDs are not guaranteed stable across regions.
@@ -42,6 +43,46 @@ export class InfraStack extends cdk.Stack {
       sortKey: { name: "job_id", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // --- Authentication ---
+    // Hosted UI handles sign-up, sign-in, and email verification as one flow —
+    // no custom Lambda triggers needed. See
+    // docs/superpowers/specs/2026-09-21-cognito-authentication-design.md.
+
+    const userPool = new cognito.UserPool(this, "UserPool", {
+      selfSignUpEnabled: true,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      standardAttributes: { email: { required: true, mutable: true } },
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT recommended for production environments
+    });
+
+    // ALLOW_ADMIN_USER_PASSWORD_AUTH is enabled purely so this pool can be
+    // verified from the CLI (see Task 3) without needing a browser — Hosted
+    // UI (Authorization Code + PKCE) is the actual sign-in flow real users
+    // go through, added in Phase 2.
+    const userPoolClient = userPool.addClient("UserPoolClient", {
+      generateSecret: false,
+      authFlows: { adminUserPassword: true },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+        callbackUrls: ["http://localhost:5173/auth/callback"],
+        logoutUrls: ["http://localhost:5173/"],
+      },
+    });
+
+    // Cognito-provided domain prefix (no custom domain needed). Must be
+    // globally unique — the account ID guarantees that.
+    const userPoolDomain = userPool.addDomain("UserPoolDomain", {
+      cognitoDomain: { domainPrefix: `cv-tailor-${this.account}` },
+    });
+
+    new cdk.CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });
+    new cdk.CfnOutput(this, "UserPoolClientId", { value: userPoolClient.userPoolClientId });
+    new cdk.CfnOutput(this, "UserPoolDomain", {
+      value: `${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com`,
     });
 
     // --- Bedrock access, split by what each service actually needs ---
