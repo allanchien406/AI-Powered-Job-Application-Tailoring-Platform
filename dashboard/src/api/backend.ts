@@ -1,3 +1,5 @@
+import { fetchAuthSession } from 'aws-amplify/auth';
+
 // Client for the deployed backend (profile-service, intake-service, and later
 // job-service / tailoring-service). Replaces the old cvApi.ts, which talked to
 // the removed cv-service.
@@ -7,9 +9,15 @@ const API_URL =
   import.meta.env.VITE_API_URL || 'https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const session = await fetchAuthSession();
+  const token = session.tokens?.accessToken?.toString();
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
