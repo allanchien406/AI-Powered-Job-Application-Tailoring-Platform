@@ -84,7 +84,28 @@ the real identity everywhere.
 
 `email` as the partition key makes the old "JDs aren't scoped to a user" bug
 structurally impossible to reintroduce — there's no code path that can fetch an
-item without specifying whose partition to read from.
+item without specifying whose partition to read from. (This partition key is
+changing to the Cognito `sub` — see "Authentication (Cognito)" below — the
+same "impossible to reintroduce" property holds, just keyed on a verified
+token claim instead of a client-supplied email.)
+
+## Authentication (Cognito) — 🚧 decided, not yet built
+
+The API Gateway has no authorization on any route today, and every Lambda
+trusts a plain `email` field from the request with no ownership check —
+anyone who knows an email can read/write that person's data. Full design:
+[`docs/superpowers/specs/2026-09-21-cognito-authentication-design.md`](docs/superpowers/specs/2026-09-21-cognito-authentication-design.md).
+
+Summary of the decisions: Cognito Hosted UI (not a custom sign-in form) for
+less frontend auth code; every Lambda derives identity from the verified
+JWT's `sub` claim (via a `HttpJwtAuthorizer` on every route, access token as
+bearer), never from a client-supplied field; `ProfilesTable` /
+`JobDescriptionsTable` partition key moves from `email` to `user_id` (the
+Cognito `sub`) with `email` demoted to a normal profile attribute — `sub` is
+stable across sign-in methods (including future social sign-in, deferred for
+now) where `email`-as-username is not. Implementation proceeds in reviewable
+phases (CDK/Cognito, then frontend, then backend) per the plan, not all at
+once.
 
 ## Embedding cache — ✅ implemented
 
