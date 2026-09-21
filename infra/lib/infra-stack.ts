@@ -3,6 +3,7 @@ import { Construct } from "constructs";
 import { Function, Runtime, Code } from "aws-cdk-lib/aws-lambda";
 import { HttpApi } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
+import { HttpJwtAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as cognito from "aws-cdk-lib/aws-cognito";
@@ -189,6 +190,12 @@ export class InfraStack extends cdk.Stack {
       },
     });
 
+    const jwtAuthorizer = new HttpJwtAuthorizer(
+      "CognitoAuthorizer",
+      `https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}`,
+      { jwtAudience: [userPoolClient.userPoolClientId] },
+    );
+
     api.addRoutes({
       path: "/profile",
       methods: [
@@ -199,6 +206,7 @@ export class InfraStack extends cdk.Stack {
         "ProfileServiceHandlerIntegration",
         profileServiceHandler,
       ),
+      authorizer: jwtAuthorizer,
     });
 
     api.addRoutes({
@@ -208,6 +216,7 @@ export class InfraStack extends cdk.Stack {
         "IntakeServiceHandlerIntegration",
         intakeServiceHandler,
       ),
+      authorizer: jwtAuthorizer,
     });
 
     api.addRoutes({
@@ -220,6 +229,7 @@ export class InfraStack extends cdk.Stack {
         "JobDescriptionHandlerIntegration",
         jobDescriptionServiceHandler,
       ),
+      authorizer: jwtAuthorizer,
     });
 
     api.addRoutes({
@@ -229,6 +239,7 @@ export class InfraStack extends cdk.Stack {
         "JobDescriptionListIntegration",
         jobDescriptionServiceHandler,
       ),
+      authorizer: jwtAuthorizer,
     });
 
     api.addRoutes({
@@ -238,6 +249,7 @@ export class InfraStack extends cdk.Stack {
         "TailoringServiceHandlerIntegration",
         tailoringServiceHandler,
       ),
+      authorizer: jwtAuthorizer,
     });
 
     api.addRoutes({
@@ -247,6 +259,7 @@ export class InfraStack extends cdk.Stack {
         "TailoringGenerateIntegration",
         tailoringServiceHandler,
       ),
+      authorizer: jwtAuthorizer,
     });
 
     new cdk.CfnOutput(this, "HttpApiUrl", {
