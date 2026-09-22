@@ -2,15 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCurrentUser } from 'aws-amplify/auth';
 import { Hub } from 'aws-amplify/utils';
+import { useCVStore } from '../store/useCVStore';
 
 export const AuthCallbackPage: React.FC = () => {
   const navigate = useNavigate();
+  const initFromSession = useCVStore((state) => state.initFromSession);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = Hub.listen('auth', ({ payload }) => {
       if (payload.event === 'signInWithRedirect') {
-        navigate('/profile', { replace: true });
+        initFromSession().then(() => navigate('/profile', { replace: true }));
       } else if (payload.event === 'signInWithRedirect_failure') {
         setError('Sign-in failed. Please try again.');
       }
@@ -19,13 +21,14 @@ export const AuthCallbackPage: React.FC = () => {
     // Amplify may finish processing the redirect before this listener is
     // registered — check directly too, in case the Hub event already fired.
     getCurrentUser()
+      .then(() => initFromSession())
       .then(() => navigate('/profile', { replace: true }))
       .catch(() => {
         /* not signed in yet — wait for the Hub event above */
       });
 
     return unsubscribe;
-  }, [navigate]);
+  }, [navigate, initFromSession]);
 
   if (error) {
     return <div className="p-8 text-center text-sm text-ink">{error}</div>;
