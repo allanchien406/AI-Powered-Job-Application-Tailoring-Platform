@@ -68,7 +68,12 @@ export class InfraStack extends cdk.Stack {
       authFlows: { adminUserPassword: true },
       oAuth: {
         flows: { authorizationCodeGrant: true },
-        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+        scopes: [
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.PROFILE,
+          cognito.OAuthScope.COGNITO_ADMIN,
+        ],
         callbackUrls: ["http://localhost:5173/auth/callback"],
         logoutUrls: ["http://localhost:5173/"],
       },
