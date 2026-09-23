@@ -43,7 +43,10 @@ def get_user_id(event):
     """The verified Cognito sub for the caller -- the only trustworthy source
     of identity. Never derive this from the request body/query string; a
     client-supplied value there is exactly the vulnerability this replaces."""
-    return event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
+    try:
+        return event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
+    except KeyError:
+        raise KeyError("requestContext.authorizer.jwt.claims.sub (is the JWT authorizer attached to this route?)")
 
 
 def now_iso():
