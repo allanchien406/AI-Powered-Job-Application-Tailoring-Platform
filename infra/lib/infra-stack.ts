@@ -34,13 +34,13 @@ export class InfraStack extends cdk.Stack {
     // that existed purely to let Lambdas reach Postgres.
 
     const profilesTable = new dynamodb.Table(this, "ProfilesTable", {
-      partitionKey: { name: "email", type: dynamodb.AttributeType.STRING },
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT recommended for production environments
     });
 
     const jobDescriptionsTable = new dynamodb.Table(this, "JobDescriptionsTable", {
-      partitionKey: { name: "email", type: dynamodb.AttributeType.STRING },
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "job_id", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
