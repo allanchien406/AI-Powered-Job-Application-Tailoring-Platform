@@ -13,9 +13,9 @@ bedrock_runtime = boto3.client("bedrock-runtime")
 
 
 class MissingIdentityError(Exception):
-	"""Raised when the JWT authorizer's claims are missing or malformed --
-	distinct from a missing environment variable, so handler can report it
-	with an accurate message instead of a misleading one."""
+    """Raised when the JWT authorizer's claims are missing or malformed --
+    distinct from a missing environment variable, so handler can report it
+    with an accurate message instead of a misleading one."""
 
 
 # Whitelist of skill/technology terms this service knows how to spot in a raw
