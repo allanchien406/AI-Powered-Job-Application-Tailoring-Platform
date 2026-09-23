@@ -39,6 +39,13 @@ def get_table():
     return dynamodb.Table(os.environ["PROFILES_TABLE_NAME"])
 
 
+def get_user_id(event):
+    """The verified Cognito sub for the caller -- the only trustworthy source
+    of identity. Never derive this from the request body/query string; a
+    client-supplied value there is exactly the vulnerability this replaces."""
+    return event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
+
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -194,13 +201,12 @@ def strip_embeddings(profile):
     }
 
 
-def get_profile_by_email(table, email):
-    return table.get_item(Key={"email": email}).get("Item")
+def get_profile_by_user_id(table, user_id):
+    return table.get_item(Key={"user_id": user_id}).get("Item")
 
 
-def save_profile(table, normalized_profile):
-    email = normalized_profile["email"]
-    existing = get_profile_by_email(table, email) or {}
+def save_profile(table, user_id, normalized_profile):
+    existing = get_profile_by_user_id(table, user_id) or {}
 
     projects, project_warnings = attach_embeddings(
         normalized_profile["projects"], existing.get("projects", []), ["name", "description"]
@@ -210,12 +216,12 @@ def save_profile(table, normalized_profile):
     )
 
     item = {
-        "email": email,
+        "user_id": user_id,
+        "email": normalized_profile["email"],
         "full_name": normalized_profile["full_name"],
         "skills": normalized_profile["skills"],
         "projects": projects,
         "experience": experience,
-        # Education is stored as-is — no embeddings, no matching (like skills).
         "education": normalized_profile["education"],
         "created_at": existing.get("created_at", now_iso()),
         "updated_at": now_iso(),
@@ -230,13 +236,8 @@ def handler(event, context):
         table = get_table()
 
         if event.get("rawPath") == "/profile" and http_method == "GET":
-            query_params = event.get("queryStringParameters") or {}
-            email = query_params.get("email")
-
-            if not email:
-                return response(400, {"error": "email query parameter is required"})
-
-            profile = get_profile_by_email(table, email)
+            user_id = get_user_id(event)
+            profile = get_profile_by_user_id(table, user_id)
 
             if not profile:
                 return response(404, {"error": "Profile not found"})
@@ -247,13 +248,10 @@ def handler(event, context):
             body = event.get("body")
             data = json.loads(body) if body else {}
 
+            user_id = get_user_id(event)
             normalized_profile = normalize_profile_payload(data)
-            email = normalized_profile["email"]
 
-            if not email:
-                return response(400, {"error": "email is required"})
-
-            item, embedding_warnings = save_profile(table, normalized_profile)
+            item, embedding_warnings = save_profile(table, user_id, normalized_profile)
 
             result = {"message": "Profile saved successfully", **strip_embeddings(item)}
             if embedding_warnings:
