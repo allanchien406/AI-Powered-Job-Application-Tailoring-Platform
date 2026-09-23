@@ -89,7 +89,7 @@ changing to the Cognito `sub` — see "Authentication (Cognito)" below — the
 same "impossible to reintroduce" property holds, just keyed on a verified
 token claim instead of a client-supplied email.)
 
-## Authentication (Cognito) — 🚧 decided, not yet built
+## Authentication (Cognito) — ✅ implemented and verified
 
 The API Gateway has no authorization on any route today, and every Lambda
 trusts a plain `email` field from the request with no ownership check —
@@ -107,11 +107,27 @@ now) where `email`-as-username is not. Implementation proceeds in reviewable
 phases (CDK/Cognito, then frontend, then backend) per the plan, not all at
 once.
 
-**Phases 1 (Cognito/CDK) and 2 (frontend Hosted UI) — ✅ implemented and
-verified.** Phase 3 (backend `sub`-based identity + DynamoDB key migration)
-is next. Implemented via `superpowers:subagent-driven-development`; full
-task-by-task record in `.superpowers/sdd/2026-09-21-cognito-authentication/`
-(git-ignored, session-local — this note is the durable summary).
+**All three phases — ✅ implemented and verified**, including Phase 3
+(backend `sub`-based identity + DynamoDB key migration: `ProfilesTable`/
+`JobDescriptionsTable` replaced with `user_id` as the partition key, all
+three Lambdas — `profile-service`, `job-service`, `tailoring-service` —
+derive identity solely from the JWT's `sub` claim, and the frontend no
+longer sends `email`/an identity field on any API call except `PUT /profile`,
+where it's just a normal display attribute). Implemented via
+`superpowers:subagent-driven-development`; full task-by-task record in
+`.superpowers/sdd/2026-09-21-cognito-authentication/` (git-ignored,
+session-local — this note is the durable summary). Verified end to end
+(curl with two real Cognito users confirming save/read/list/tailor all work
+and neither user can see the other's data, plus the full browser flow) after
+deploying the schema-migrating changes — the migration wiped the prior
+`email`-keyed table contents as anticipated, so existing profile/job data
+was re-entered once through the app post-deploy.
+
+**Each of the three Lambdas also picked up a `MissingIdentityError`
+exception**, distinct from `KeyError`, so a missing/malformed JWT-authorizer
+context produces an accurate error instead of being misreported as a
+missing environment variable (found via code review during Phase 3, not
+part of the original design).
 
 **Gotcha hit during Phase 2 verification, worth remembering:** getting
 `fetchUserAttributes()` to work after Hosted UI sign-in needed the
