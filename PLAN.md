@@ -37,15 +37,19 @@ API Gateway (HttpApi)
  └─ /tailor-generate       → tailoring-service    (reads both tables + Bedrock)
 ```
 
+Every route above sits behind a `HttpJwtAuthorizer` — there is no
+unauthenticated route. See "Authentication (Cognito)" below.
+
 ### `ProfilesTable` — ✅ implemented
 
 | | |
 |---|---|
-| Partition key | `email` (S) |
+| Partition key | `user_id` (S, the Cognito `sub`) |
 | Sort key | none — one item per user |
 
 ```json
 {
+  "user_id": "<cognito-sub-uuid>",
   "email": "allan@example.com",
   "full_name": "Allan Chien",
   "skills": ["AWS", "Python", "Docker"],
@@ -60,19 +64,21 @@ API Gateway (HttpApi)
 }
 ```
 
-`profile_id` was dropped — nothing downstream ever used it as a key; `email` is
-the real identity everywhere.
+`profile_id` was dropped — nothing downstream ever used it as a key;
+`user_id` (the Cognito `sub`, verified from the JWT on every request) is the
+real identity everywhere. `email` remains as a normal, optional display
+attribute — never used for lookup.
 
 ### `JobDescriptionsTable` — ✅ implemented
 
 | | |
 |---|---|
-| Partition key | `email` (S) |
+| Partition key | `user_id` (S, the Cognito `sub`) |
 | Sort key | `job_id` (S, UUID generated at save time — was a SERIAL int under RDS) |
 
 ```json
 {
-  "email": "allan@example.com",
+  "user_id": "<cognito-sub-uuid>",
   "job_id": "3f1c9e2a-8b0d-4e3a-9f21-6c1a2b3d4e5f",
   "company_name": "Catalyst Cloud",
   "job_title": "Junior DevOps Engineer",
@@ -82,18 +88,20 @@ the real identity everywhere.
 }
 ```
 
-`email` as the partition key makes the old "JDs aren't scoped to a user" bug
+`user_id` as the partition key makes the old "JDs aren't scoped to a user" bug
 structurally impossible to reintroduce — there's no code path that can fetch an
-item without specifying whose partition to read from. (This partition key is
-changing to the Cognito `sub` — see "Authentication (Cognito)" below — the
-same "impossible to reintroduce" property holds, just keyed on a verified
-token claim instead of a client-supplied email.)
+item without specifying whose partition to read from, and that partition is
+always the verified JWT `sub`, never a client-supplied value. (This key was
+originally `email`; it was renamed to `user_id` as part of the Cognito
+authentication work — see "Authentication (Cognito)" below.)
 
 ## Authentication (Cognito) — ✅ implemented and verified
 
-The API Gateway has no authorization on any route today, and every Lambda
-trusts a plain `email` field from the request with no ownership check —
-anyone who knows an email can read/write that person's data. Full design:
+The API Gateway previously had no authorization on any route, and every
+Lambda trusted a plain `email` field from the request with no ownership
+check — anyone who knew an email could read/write that person's data. This
+is now fixed: every route requires a valid Cognito JWT, and identity is
+derived solely from the token's verified `sub` claim. Full design:
 [`docs/superpowers/specs/2026-09-21-cognito-authentication-design.md`](docs/superpowers/specs/2026-09-21-cognito-authentication-design.md).
 
 Summary of the decisions: Cognito Hosted UI (not a custom sign-in form) for
@@ -269,8 +277,9 @@ scoring exists. Revisit as real usage data accumulates.
 
 ## Generation — ✅ implemented
 
-- `POST /tailor-generate` accepts `{email, job_id}` (a saved job) or
-  `{email, company_name, job_title, raw_description}` (ad-hoc, never persisted).
+- `POST /tailor-generate` accepts `{job_id}` (a saved job) or
+  `{company_name, job_title, raw_description}` (ad-hoc, never persisted).
+  Identity comes from the JWT, not the request body.
 - Calls Bedrock **Claude Haiku 4.5** via the Converse API with matched
   projects/experience, explicitly instructed not to invent employers,
   dates, or achievements not present in the input.
@@ -642,7 +651,7 @@ User-proposed, captured here for later. Not designed or scoped yet.
    from `/tailor-generate`, not just the manual builder.
 5. **Cover letter generation.** A new capability, not just a fix — likely a
    new Bedrock-backed route (e.g. `POST /cover-letter-generate`) that takes
-   the same `{email, job_id}` shape as `/tailor-generate` and reuses the same
+   the same `{job_id}` shape as `/tailor-generate` and reuses the same
    matched-profile-data + anti-hallucination prompt discipline established
    there, producing a tailored cover letter instead of (or alongside) the CV
    sections.
@@ -675,9 +684,9 @@ User-proposed, captured here for later. Not designed or scoped yet.
    entry's `embedding` is identical across both saves (not redundantly
    re-embedded), while a genuinely edited entry gets a new one.
 4. `PUT /job-description` → confirm the response returns a UUID `job_id`.
-5. `GET /job-description/list?email=...` → confirm it lists only that user's
-   saved jobs.
-6. `POST /tailor-generate` ad-hoc (no `job_id`) and saved-job (`{email, job_id}`)
+5. `GET /job-description/list` (no query params — identity comes from the JWT)
+   → confirm it lists only that user's saved jobs.
+6. `POST /tailor-generate` ad-hoc (no `job_id`) and saved-job (`{job_id}`)
    paths both return a non-empty `generated_cv`.
 7. A profile entry worded as a paraphrase (not a literal keyword match) still
    surfaces in `matched_projects`/`matched_experiences` under `/tailor-generate`.
