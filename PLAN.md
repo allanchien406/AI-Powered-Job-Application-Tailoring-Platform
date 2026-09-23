@@ -107,6 +107,31 @@ now) where `email`-as-username is not. Implementation proceeds in reviewable
 phases (CDK/Cognito, then frontend, then backend) per the plan, not all at
 once.
 
+**Phases 1 (Cognito/CDK) and 2 (frontend Hosted UI) — ✅ implemented and
+verified.** Phase 3 (backend `sub`-based identity + DynamoDB key migration)
+is next. Implemented via `superpowers:subagent-driven-development`; full
+task-by-task record in `.superpowers/sdd/2026-09-21-cognito-authentication/`
+(git-ignored, session-local — this note is the durable summary).
+
+**Gotcha hit during Phase 2 verification, worth remembering:** getting
+`fetchUserAttributes()` to work after Hosted UI sign-in needed the
+`aws.cognito.signin.user.admin` OAuth scope added in **two separate
+places**, not one — `infra/lib/infra-stack.ts`'s `AllowedOAuthScopes`
+(what the User Pool Client *permits*) AND `dashboard/src/amplify-config.ts`'s
+`oauth.scopes` (what the client actually *requests* during sign-in). Adding
+it to only the CDK side (permitting it) silently does nothing — the token
+still won't carry the scope unless the frontend also asks for it. A curl-based
+"verification" using `admin-initiate-auth` gave false confidence here, since
+that non-OAuth flow always carries the admin scope regardless of this
+config — it never actually exercises the OAuth path real users go through.
+Lesson: verify a fix via the actual code path it's fixing, not an adjacent
+one that happens to already work. (Separately: a Safari content-blocker
+extension surfaced a misleading `BadRequest` error mid-debugging that
+looked related but wasn't — Safari's Private Browsing does *not* disable
+Safari App Store content-blocker extensions the way Chrome disables
+extensions in Incognito, so "I tried private mode" didn't rule out an
+extension there the way it would in Chrome.)
+
 ## Embedding cache — ✅ implemented
 
 - Computed once in `profile-service`/`job-service` on save, stored inline on each
