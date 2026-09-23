@@ -45,7 +45,7 @@ export const ProfileIntakePage: React.FC = () => {
     let cancelled = false;
     setStage('loading');
     setError(null);
-    getProfile(email)
+    getProfile()
       .then((saved) => {
         if (cancelled) return;
         setProfile(saved);
@@ -92,7 +92,7 @@ export const ProfileIntakePage: React.FC = () => {
     setStage('saving');
     setError(null);
     try {
-      await saveProfile(email, profile);
+      await saveProfile({ ...profile, email });
       setStage('saved');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong saving your profile.');

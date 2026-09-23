@@ -64,7 +64,7 @@ export const JobDescriptionPage: React.FC = () => {
 
   useEffect(() => {
     if (!email) return;
-    listJobDescriptions(email)
+    listJobDescriptions()
       .then((data) => {
         setJobs(data);
         setListState('loaded');
@@ -73,7 +73,7 @@ export const JobDescriptionPage: React.FC = () => {
 
     // Cache the saved profile so the generated-CV preview can carry the real
     // name + skills and "Open in editor" doesn't need an extra fetch.
-    getProfile(email)
+    getProfile()
       .then(setProfile)
       .catch(() => setProfile(null));
   }, [email]);
@@ -94,7 +94,7 @@ export const JobDescriptionPage: React.FC = () => {
     setSaveState('saving');
     setSaveError(null);
     try {
-      const saved = await saveJobDescription(email, {
+      const saved = await saveJobDescription({
         company_name: companyName.trim(),
         job_title: jobTitle.trim(),
         raw_description: rawDescription.trim(),
@@ -131,7 +131,7 @@ export const JobDescriptionPage: React.FC = () => {
     setEditState('saving');
     setEditError(null);
     try {
-      const updated = await updateJobDescription(email, job.job_id, {
+      const updated = await updateJobDescription(job.job_id, {
         company_name: editForm.company_name.trim(),
         job_title: editForm.job_title.trim(),
         raw_description: editForm.raw_description.trim(),
@@ -162,8 +162,8 @@ export const JobDescriptionPage: React.FC = () => {
     setResult(null);
     setGenerateState({ jobId: job.job_id, status: 'generating' });
     try {
-      const data = await generateTailoredCV(email, job.job_id);
-      const savedProfile = profile ?? (await getProfile(email).catch(() => null));
+      const data = await generateTailoredCV(job.job_id);
+      const savedProfile = profile ?? (await getProfile().catch(() => null));
       saveGeneratedCV(savedProfile, data.generated_cv, job.job_id, jobRefOf(job));
       setResult({ jobId: job.job_id, generatedCv: data.generated_cv });
       setGenerateState(null);
@@ -179,7 +179,7 @@ export const JobDescriptionPage: React.FC = () => {
   const handlePreview = async (job: StoredJobDescription) => {
     setPreviewState({ jobId: job.job_id, status: 'loading' });
     try {
-      const preview = await tailorPreview(email, job.job_id);
+      const preview = await tailorPreview(job.job_id);
       setPreviewState({ jobId: job.job_id, status: 'loaded', result: preview });
     } catch (e) {
       setPreviewState({

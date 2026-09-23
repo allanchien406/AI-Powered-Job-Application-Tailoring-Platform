@@ -70,19 +70,18 @@ export async function parseProfileText(rawText: string): Promise<Profile> {
   return data.profile;
 }
 
-/** Fetch a saved profile. Throws on 404. */
-export async function getProfile(email: string): Promise<StoredProfile> {
-  return request<StoredProfile>(`/profile?email=${encodeURIComponent(email)}`);
+/** Fetch the signed-in user's saved profile. Throws on 404. */
+export async function getProfile(): Promise<StoredProfile> {
+  return request<StoredProfile>('/profile');
 }
 
-/** Create or fully replace a profile. */
-export async function saveProfile(
-  email: string,
-  profile: Profile,
-): Promise<StoredProfile> {
+/** Create or fully replace the signed-in user's profile. `email` is stored
+ * as a normal display attribute now — it plays no role in identifying whose
+ * profile this is; the backend derives that from the caller's JWT. */
+export async function saveProfile(profile: Profile & { email: string }): Promise<StoredProfile> {
   return request<StoredProfile>('/profile', {
     method: 'PUT',
-    body: JSON.stringify({ email, ...profile }),
+    body: JSON.stringify(profile),
   });
 }
 
@@ -93,49 +92,42 @@ export interface JobDescriptionInput {
 }
 
 export interface StoredJobDescription extends JobDescriptionInput {
-  email: string;
   job_id: string;
   created_at: string;
 }
 
 /** Save a new job description. Always creates a new item — there's no
  * update-in-place or dedup, so re-saving the same posting makes a second copy. */
-export async function saveJobDescription(
-  email: string,
-  job: JobDescriptionInput,
-): Promise<StoredJobDescription> {
-  const data = await request<{ message: string; job_id: string; email: string; company_name: string; job_title: string }>(
+export async function saveJobDescription(job: JobDescriptionInput): Promise<StoredJobDescription> {
+  const data = await request<{ message: string; job_id: string; company_name: string; job_title: string }>(
     '/job-description',
     {
       method: 'PUT',
-      body: JSON.stringify({ email, ...job }),
+      body: JSON.stringify(job),
     },
   );
-  return { ...job, email: data.email, job_id: data.job_id, created_at: new Date().toISOString() };
+  return { ...job, job_id: data.job_id, created_at: new Date().toISOString() };
 }
 
 /** Update an existing job description in place. `job_id` is preserved, so any
  * previously tailored result still points at the same job. */
 export async function updateJobDescription(
-  email: string,
   jobId: string,
   job: JobDescriptionInput,
 ): Promise<StoredJobDescription> {
-  const data = await request<{ message: string; job_id: string; email: string; company_name: string; job_title: string }>(
+  const data = await request<{ message: string; job_id: string; company_name: string; job_title: string }>(
     '/job-description',
     {
       method: 'PUT',
-      body: JSON.stringify({ email, job_id: jobId, ...job }),
+      body: JSON.stringify({ job_id: jobId, ...job }),
     },
   );
-  return { ...job, email: data.email, job_id: data.job_id, created_at: new Date().toISOString() };
+  return { ...job, job_id: data.job_id, created_at: new Date().toISOString() };
 }
 
-/** List every job description a user has saved, most recent first. */
-export async function listJobDescriptions(email: string): Promise<StoredJobDescription[]> {
-  const data = await request<{ job_descriptions: StoredJobDescription[] }>(
-    `/job-description/list?email=${encodeURIComponent(email)}`,
-  );
+/** List every job description the signed-in user has saved, most recent first. */
+export async function listJobDescriptions(): Promise<StoredJobDescription[]> {
+  const data = await request<{ job_descriptions: StoredJobDescription[] }>('/job-description/list');
   return data.job_descriptions;
 }
 
@@ -183,20 +175,19 @@ export interface TailorPreviewResult {
 
 /** Free keyword-only matching preview — unlike /tailor-generate this makes no
  * Bedrock calls, so it's safe to run often (e.g. as the user edits). */
-export async function tailorPreview(email: string, jobId: string): Promise<TailorPreviewResult> {
+export async function tailorPreview(jobId: string): Promise<TailorPreviewResult> {
   return request('/tailor-preview', {
     method: 'POST',
-    body: JSON.stringify({ email, job_id: jobId }),
+    body: JSON.stringify({ job_id: jobId }),
   });
 }
 
 /** Run the full matching + Bedrock generation pipeline against a saved job. */
 export async function generateTailoredCV(
-  email: string,
   jobId: string,
 ): Promise<{ prompt_context: PromptContext; generated_cv: GeneratedCV }> {
   return request('/tailor-generate', {
     method: 'POST',
-    body: JSON.stringify({ email, job_id: jobId }),
+    body: JSON.stringify({ job_id: jobId }),
   });
 }
