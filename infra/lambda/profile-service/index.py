@@ -19,6 +19,12 @@ class DecimalEncoder(json.JSONEncoder):
         return super().default(o)
 
 
+class MissingIdentityError(Exception):
+    """Raised when the JWT authorizer's claims are missing or malformed --
+    distinct from a missing environment variable, so handler can report it
+    with an accurate message instead of a misleading one."""
+
+
 def response(status_code, body):
     return {
         "statusCode": status_code,
@@ -46,7 +52,9 @@ def get_user_id(event):
     try:
         return event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
     except KeyError:
-        raise KeyError("requestContext.authorizer.jwt.claims.sub (is the JWT authorizer attached to this route?)")
+        raise MissingIdentityError(
+            "JWT authorizer context missing or malformed -- is the authorizer attached to this route?"
+        )
 
 
 def now_iso():
@@ -266,6 +274,8 @@ def handler(event, context):
 
     except json.JSONDecodeError:
         return response(400, {"error": "Invalid JSON body"})
+    except MissingIdentityError as exc:
+        return response(500, {"error": str(exc)})
     except KeyError as exc:
         return response(500, {"error": f"Missing required environment variable: {str(exc)}"})
     except Exception as exc:
