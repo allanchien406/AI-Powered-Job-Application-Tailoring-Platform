@@ -21,7 +21,6 @@ const formatDate = (iso: string) => {
 
 export const CVBuilderPage: React.FC = () => {
   const navigate = useNavigate();
-  const email = useCVStore((state) => state.email);
   const cvs = useCVStore((state) => state.cvs);
   const viewerCv = useCVStore((state) => state.viewerCv);
   const viewerJobId = useCVStore((state) => state.viewerJobId);
@@ -81,8 +80,8 @@ export const CVBuilderPage: React.FC = () => {
     setRegenerating(true);
     setRegenerateError(null);
     try {
-      const data = await generateTailoredCV(email, viewerJobId);
-      const profile = await getProfile(email).catch(() => null);
+      const data = await generateTailoredCV(viewerJobId);
+      const profile = await getProfile().catch(() => null);
       saveGeneratedCV(profile, data.generated_cv, viewerJobId, entry.jobRef);
     } catch (e) {
       setRegenerateError(e instanceof Error ? e.message : 'Something went wrong regenerating this CV.');

@@ -37,15 +37,19 @@ API Gateway (HttpApi)
  └─ /tailor-generate       → tailoring-service    (reads both tables + Bedrock)
 ```
 
+Every route above sits behind a `HttpJwtAuthorizer` — there is no
+unauthenticated route. See "Authentication (Cognito)" below.
+
 ### `ProfilesTable` — ✅ implemented
 
 | | |
 |---|---|
-| Partition key | `email` (S) |
+| Partition key | `user_id` (S, the Cognito `sub`) |
 | Sort key | none — one item per user |
 
 ```json
 {
+  "user_id": "<cognito-sub-uuid>",
   "email": "allan@example.com",
   "full_name": "Allan Chien",
   "skills": ["AWS", "Python", "Docker"],
@@ -60,19 +64,21 @@ API Gateway (HttpApi)
 }
 ```
 
-`profile_id` was dropped — nothing downstream ever used it as a key; `email` is
-the real identity everywhere.
+`profile_id` was dropped — nothing downstream ever used it as a key;
+`user_id` (the Cognito `sub`, verified from the JWT on every request) is the
+real identity everywhere. `email` remains as a normal, optional display
+attribute — never used for lookup.
 
 ### `JobDescriptionsTable` — ✅ implemented
 
 | | |
 |---|---|
-| Partition key | `email` (S) |
+| Partition key | `user_id` (S, the Cognito `sub`) |
 | Sort key | `job_id` (S, UUID generated at save time — was a SERIAL int under RDS) |
 
 ```json
 {
-  "email": "allan@example.com",
+  "user_id": "<cognito-sub-uuid>",
   "job_id": "3f1c9e2a-8b0d-4e3a-9f21-6c1a2b3d4e5f",
   "company_name": "Catalyst Cloud",
   "job_title": "Junior DevOps Engineer",
@@ -82,9 +88,73 @@ the real identity everywhere.
 }
 ```
 
-`email` as the partition key makes the old "JDs aren't scoped to a user" bug
+`user_id` as the partition key makes the old "JDs aren't scoped to a user" bug
 structurally impossible to reintroduce — there's no code path that can fetch an
-item without specifying whose partition to read from.
+item without specifying whose partition to read from, and that partition is
+always the verified JWT `sub`, never a client-supplied value. (This key was
+originally `email`; it was renamed to `user_id` as part of the Cognito
+authentication work — see "Authentication (Cognito)" below.)
+
+## Authentication (Cognito) — ✅ implemented and verified
+
+The API Gateway previously had no authorization on any route, and every
+Lambda trusted a plain `email` field from the request with no ownership
+check — anyone who knew an email could read/write that person's data. This
+is now fixed: every route requires a valid Cognito JWT, and identity is
+derived solely from the token's verified `sub` claim. Full design:
+[`docs/superpowers/specs/2026-09-21-cognito-authentication-design.md`](docs/superpowers/specs/2026-09-21-cognito-authentication-design.md).
+
+Summary of the decisions: Cognito Hosted UI (not a custom sign-in form) for
+less frontend auth code; every Lambda derives identity from the verified
+JWT's `sub` claim (via a `HttpJwtAuthorizer` on every route, access token as
+bearer), never from a client-supplied field; `ProfilesTable` /
+`JobDescriptionsTable` partition key moves from `email` to `user_id` (the
+Cognito `sub`) with `email` demoted to a normal profile attribute — `sub` is
+stable across sign-in methods (including future social sign-in, deferred for
+now) where `email`-as-username is not. Implementation proceeds in reviewable
+phases (CDK/Cognito, then frontend, then backend) per the plan, not all at
+once.
+
+**All three phases — ✅ implemented and verified**, including Phase 3
+(backend `sub`-based identity + DynamoDB key migration: `ProfilesTable`/
+`JobDescriptionsTable` replaced with `user_id` as the partition key, all
+three Lambdas — `profile-service`, `job-service`, `tailoring-service` —
+derive identity solely from the JWT's `sub` claim, and the frontend no
+longer sends `email`/an identity field on any API call except `PUT /profile`,
+where it's just a normal display attribute). Implemented via
+`superpowers:subagent-driven-development`; full task-by-task record in
+`.superpowers/sdd/2026-09-21-cognito-authentication/` (git-ignored,
+session-local — this note is the durable summary). Verified end to end
+(curl with two real Cognito users confirming save/read/list/tailor all work
+and neither user can see the other's data, plus the full browser flow) after
+deploying the schema-migrating changes — the migration wiped the prior
+`email`-keyed table contents as anticipated, so existing profile/job data
+was re-entered once through the app post-deploy.
+
+**Each of the three Lambdas also picked up a `MissingIdentityError`
+exception**, distinct from `KeyError`, so a missing/malformed JWT-authorizer
+context produces an accurate error instead of being misreported as a
+missing environment variable (found via code review during Phase 3, not
+part of the original design).
+
+**Gotcha hit during Phase 2 verification, worth remembering:** getting
+`fetchUserAttributes()` to work after Hosted UI sign-in needed the
+`aws.cognito.signin.user.admin` OAuth scope added in **two separate
+places**, not one — `infra/lib/infra-stack.ts`'s `AllowedOAuthScopes`
+(what the User Pool Client *permits*) AND `dashboard/src/amplify-config.ts`'s
+`oauth.scopes` (what the client actually *requests* during sign-in). Adding
+it to only the CDK side (permitting it) silently does nothing — the token
+still won't carry the scope unless the frontend also asks for it. A curl-based
+"verification" using `admin-initiate-auth` gave false confidence here, since
+that non-OAuth flow always carries the admin scope regardless of this
+config — it never actually exercises the OAuth path real users go through.
+Lesson: verify a fix via the actual code path it's fixing, not an adjacent
+one that happens to already work. (Separately: a Safari content-blocker
+extension surfaced a misleading `BadRequest` error mid-debugging that
+looked related but wasn't — Safari's Private Browsing does *not* disable
+Safari App Store content-blocker extensions the way Chrome disables
+extensions in Incognito, so "I tried private mode" didn't rule out an
+extension there the way it would in Chrome.)
 
 ## Embedding cache — ✅ implemented
 
@@ -207,8 +277,9 @@ scoring exists. Revisit as real usage data accumulates.
 
 ## Generation — ✅ implemented
 
-- `POST /tailor-generate` accepts `{email, job_id}` (a saved job) or
-  `{email, company_name, job_title, raw_description}` (ad-hoc, never persisted).
+- `POST /tailor-generate` accepts `{job_id}` (a saved job) or
+  `{company_name, job_title, raw_description}` (ad-hoc, never persisted).
+  Identity comes from the JWT, not the request body.
 - Calls Bedrock **Claude Haiku 4.5** via the Converse API with matched
   projects/experience, explicitly instructed not to invent employers,
   dates, or achievements not present in the input.
@@ -711,7 +782,7 @@ User-proposed, captured here for later. Not designed or scoped yet.
    from `/tailor-generate`, not just the manual builder.
 5. **Cover letter generation.** A new capability, not just a fix — likely a
    new Bedrock-backed route (e.g. `POST /cover-letter-generate`) that takes
-   the same `{email, job_id}` shape as `/tailor-generate` and reuses the same
+   the same `{job_id}` shape as `/tailor-generate` and reuses the same
    matched-profile-data + anti-hallucination prompt discipline established
    there, producing a tailored cover letter instead of (or alongside) the CV
    sections.
@@ -749,9 +820,9 @@ User-proposed, captured here for later. Not designed or scoped yet.
    entry's `embedding` is identical across both saves (not redundantly
    re-embedded), while a genuinely edited entry gets a new one.
 4. `PUT /job-description` → confirm the response returns a UUID `job_id`.
-5. `GET /job-description/list?email=...` → confirm it lists only that user's
-   saved jobs.
-6. `POST /tailor-generate` ad-hoc (no `job_id`) and saved-job (`{email, job_id}`)
+5. `GET /job-description/list` (no query params — identity comes from the JWT)
+   → confirm it lists only that user's saved jobs.
+6. `POST /tailor-generate` ad-hoc (no `job_id`) and saved-job (`{job_id}`)
    paths both return a non-empty `generated_cv`.
 7. A profile entry worded as a paraphrase (not a literal keyword match) still
    surfaces in `matched_projects`/`matched_experiences` under `/tailor-generate`.

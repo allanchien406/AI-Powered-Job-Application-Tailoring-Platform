@@ -27,8 +27,8 @@ interface AppStore {
   viewerJobId: string | null;
   viewerTemplateId: string;
 
-  login: (email: string) => void;
-  logout: () => void;
+  initFromSession: () => Promise<void>;
+  logout: () => Promise<void>;
   saveGeneratedCV: (profile: StoredProfile | null, generated: GeneratedCV, jobId: string, jobRef: JobRef) => void;
   selectCV: (jobId: string) => void;
   getCVForJob: (jobId: string) => TailoredCVEntry | undefined;
@@ -113,12 +113,24 @@ export const useCVStore = create<AppStore>((set, get) => ({
     initial.cvs[0]?.templateId ??
     DEFAULT_TEMPLATE_ID,
 
-  login: (email) => {
-    localStorage.setItem(EMAIL_KEY, email);
-    set({ email });
+  initFromSession: async () => {
+    const { fetchUserAttributes } = await import('aws-amplify/auth');
+    try {
+      const attrs = await fetchUserAttributes();
+      const email = (attrs.email || '').toLowerCase();
+      localStorage.setItem(EMAIL_KEY, email);
+      set({ email });
+    } catch {
+      // Not signed in — leave the store's email empty so existing
+      // per-page "you need to sign in first" guards keep working.
+      localStorage.removeItem(EMAIL_KEY);
+      set({ email: '' });
+    }
   },
 
-  logout: () => {
+  logout: async () => {
+    const { signOut } = await import('aws-amplify/auth');
+    await signOut();
     localStorage.removeItem(EMAIL_KEY);
     localStorage.removeItem(DIR_STORAGE_KEY);
     set({ email: '', cvs: [], viewerCv: null, viewerMeta: null, viewerJobId: null, viewerTemplateId: DEFAULT_TEMPLATE_ID });

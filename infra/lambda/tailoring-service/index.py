@@ -12,6 +12,12 @@ dynamodb = boto3.resource("dynamodb")
 bedrock_runtime = boto3.client("bedrock-runtime")
 
 
+class MissingIdentityError(Exception):
+    """Raised when the JWT authorizer's claims are missing or malformed --
+    distinct from a missing environment variable, so handler can report it
+    with an accurate message instead of a misleading one."""
+
+
 # Whitelist of skill/technology terms this service knows how to spot in a raw
 # job description. Only terms in this list can ever end up in
 # `extracted_requirements` — anything a JD asks for that isn't here (or an
@@ -129,14 +135,26 @@ def job_descriptions_table():
     return dynamodb.Table(os.environ["JOB_DESCRIPTIONS_TABLE_NAME"])
 
 
-def get_profile_by_email(email):
+def get_user_id(event):
+    """The verified Cognito sub for the caller -- the only trustworthy source
+    of identity. Never derive this from the request body/query string; a
+    client-supplied value there is exactly the vulnerability this replaces."""
+    try:
+        return event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
+    except KeyError:
+        raise MissingIdentityError(
+            "JWT authorizer context missing or malformed -- is the authorizer attached to this route?"
+        )
+
+
+def get_profile_by_user_id(user_id):
     """Read-only lookup — this service never writes to ProfilesTable."""
-    return profiles_table().get_item(Key={"email": email}).get("Item")
+    return profiles_table().get_item(Key={"user_id": user_id}).get("Item")
 
 
-def get_job_description_by_id(email, job_id):
+def get_job_description_by_id(user_id, job_id):
     """Read-only lookup — this service never writes to JobDescriptionsTable."""
-    return job_descriptions_table().get_item(Key={"email": email, "job_id": job_id}).get("Item")
+    return job_descriptions_table().get_item(Key={"user_id": user_id, "job_id": job_id}).get("Item")
 
 
 def normalize_text(text):
@@ -529,19 +547,17 @@ def handle_tailor_preview(event):
     body = event.get("body")
     data = json.loads(body) if body else {}
 
-    email = (data.get("email") or "").strip().lower()
+    user_id = get_user_id(event)
     job_id = data.get("job_id")
 
-    if not email:
-        return response(400, {"error": "email is required"})
     if not job_id:
         return response(400, {"error": "job_id is required"})
 
-    profile = get_profile_by_email(email)
+    profile = get_profile_by_user_id(user_id)
     if not profile:
         return response(404, {"error": "Profile not found"})
 
-    job_description = get_job_description_by_id(email, job_id)
+    job_description = get_job_description_by_id(user_id, job_id)
     if not job_description:
         return response(404, {"error": "Job description not found"})
 
@@ -554,7 +570,6 @@ def handle_tailor_preview(event):
         200,
         {
             "message": "Tailor preview data loaded successfully",
-            "email": email,
             "job_id": job_id,
             "extracted_requirements": extracted_requirements,
             "matched_projects": matched_projects,
@@ -566,25 +581,22 @@ def handle_tailor_preview(event):
 
 def handle_tailor_generate(event):
     """POST /tailor-generate: the full pipeline. Accepts either a saved
-    {email, job_id} or an ad-hoc {email, company_name, job_title,
-    raw_description} that's never persisted. Matching is pure embedding
-    similarity (no keyword component — see score_entries_with_semantics),
-    then calls Bedrock, which reads the actual JD text directly, to produce
-    an actual tailored CV section."""
+    {job_id} or an ad-hoc {company_name, job_title, raw_description} that's
+    never persisted. Matching is pure embedding similarity (no keyword
+    component — see score_entries_with_semantics), then calls Bedrock, which
+    reads the actual JD text directly, to produce an actual tailored CV
+    section."""
     data = json.loads(event.get("body") or "{}")
-    email = (data.get("email") or "").strip().lower()
+    user_id = get_user_id(event)
 
-    if not email:
-        return response(400, {"error": "email is required"})
-
-    profile = get_profile_by_email(email)
+    profile = get_profile_by_user_id(user_id)
     if not profile:
         return response(404, {"error": "Profile not found"})
 
     if data.get("job_id"):
         # Saved-job path: reuse the JD's cached embedding if it has one,
         # otherwise embed it now (covers JDs saved before embeddings existed).
-        job_description = get_job_description_by_id(email, data["job_id"])
+        job_description = get_job_description_by_id(user_id, data["job_id"])
         if not job_description:
             return response(404, {"error": "Job description not found"})
         jd_vector = to_float_vector(job_description.get("embedding")) or safe_embed_text(
@@ -613,7 +625,6 @@ def handle_tailor_generate(event):
         200,
         {
             "message": "Tailored CV generated",
-            "email": email,
             "prompt_context": prompt_context,
             "generated_cv": generated_cv,
         },
@@ -637,6 +648,8 @@ def handler(event, context):
 
     except json.JSONDecodeError:
         return response(400, {"error": "Invalid JSON body"})
+    except MissingIdentityError as exc:
+        return response(500, {"error": str(exc)})
     except KeyError as exc:
         return response(500, {"error": f"Missing required environment variable: {str(exc)}"})
     except Exception as exc:
