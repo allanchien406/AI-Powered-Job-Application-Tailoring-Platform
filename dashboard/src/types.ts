@@ -33,6 +33,14 @@ export interface EntrySection {
   bullets: string[];
 }
 
+/** A skill on the CV. `name` is the editable label; `level` is an optional
+ * 1–10 proficiency (the Modern template draws its progress bar from it — when
+ * unset the bar is hidden entirely). */
+export interface SkillEntry {
+  name: string;
+  level?: number;
+}
+
 export interface CVData {
   name: string;
   title: string;
@@ -44,7 +52,7 @@ export interface CVData {
   summary: string;
   experience: ExperienceEntry[];
   education: EducationEntry[];
-  skills: string[];
+  skills: SkillEntry[];
   accentColor: string;
   // Optional, template-specific sections — only EmbeddedTemplate.tsx reads
   // these today. `projects`/`research` are derived from `experience` in

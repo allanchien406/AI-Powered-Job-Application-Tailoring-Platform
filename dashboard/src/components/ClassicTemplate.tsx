@@ -1,5 +1,6 @@
 import React from 'react';
 import { CVData } from '../types';
+import { Editable } from './editable';
 
 interface Props {
   cv: CVData;
@@ -44,6 +45,7 @@ interface Props {
 export const ClassicTemplate: React.FC<Props> = ({ cv }) => {
   return (
     <div
+      className="cv-sheet"
       style={{
         width: '210mm',
         minHeight: '297mm',
@@ -54,9 +56,15 @@ export const ClassicTemplate: React.FC<Props> = ({ cv }) => {
       }}
     >
       {/* TODO: replace this placeholder with your own Classic-style layout. */}
-      <h1>{cv.name || 'Your Name'}</h1>
-      <p>{cv.title}</p>
-      <p>{cv.summary}</p>
+      <h1>
+        <Editable field="name" value={cv.name || 'Your Name'} />
+      </h1>
+      <p>
+        <Editable field="title" value={cv.title} />
+      </p>
+      <p>
+        <Editable field="summary" value={cv.summary} />
+      </p>
     </div>
   );
 };

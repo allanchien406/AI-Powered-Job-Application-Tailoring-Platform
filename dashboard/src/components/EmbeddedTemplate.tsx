@@ -1,5 +1,6 @@
- import React from 'react';
+import React from 'react';
 import { CVData, EntrySection } from '../types';
+import { Editable } from './editable';
 
 interface Props {
   cv: CVData;
@@ -18,12 +19,12 @@ interface Props {
  * and `referencesNote` have no generator yet, so those sections render
  * empty/fallback until something populates them.
  */
-
 export const EmbeddedTemplate: React.FC<Props> = ({ cv }) => {
   const c = cv.accentColor;
 
   return (
     <div
+      className="cv-sheet"
       style={{
         width: '210mm',
         minHeight: '297mm',
@@ -35,7 +36,10 @@ export const EmbeddedTemplate: React.FC<Props> = ({ cv }) => {
       }}
     >
       {/* Header */}
-      <div style={{ textAlign: 'center', padding: '34px 40px 20px', borderBottom: `2px solid ${c}` }}>
+      <div
+        className="cv-no-break"
+        style={{ textAlign: 'center', padding: '34px 40px 20px', borderBottom: `2px solid ${c}` }}
+      >
         <div
           style={{
             fontSize: '30px',
@@ -45,7 +49,7 @@ export const EmbeddedTemplate: React.FC<Props> = ({ cv }) => {
             marginBottom: '6px',
           }}
         >
-          {cv.name || 'Your Name'}
+          <Editable as="div" field="name" value={cv.name || 'Your Name'} />
         </div>
         <div
           style={{
@@ -57,39 +61,76 @@ export const EmbeddedTemplate: React.FC<Props> = ({ cv }) => {
             color: '#6e6b63',
           }}
         >
-          {cv.location && <span>{cv.location}</span>}
-          {cv.phone && <span>{cv.phone}</span>}
-          {cv.email && <span>{cv.email}</span>}
-          {cv.website && (
-            <a href={cv.website} style={{ color: '#1155CC', textDecoration: 'underline' }}>
-              {cv.website.replace(/^https?:\/\//, '')}
-            </a>
-          )}
+          <Editable field="location" value={cv.location} />
+          <Editable field="phone" value={cv.phone} />
+          <Editable field="email" value={cv.email} />
+          {cv.website && <Editable field="website" value={cv.website.replace(/^https?:\/\//, '')} />}
         </div>
       </div>
 
-      <div style={{ padding: '24px 40px 36px' }}>
+      <div className="cv-flow" style={{ padding: '24px 40px 36px' }}>
         {cv.summary && (
           <Section title="Professional Summary" color={c}>
-            <p style={{ fontSize: '12.5px', lineHeight: 1.75, color: '#3a3835', margin: 0 }}>{cv.summary}</p>
+            <Editable
+              field="summary"
+              value={cv.summary}
+              as="p"
+              style={{ fontSize: '12.5px', lineHeight: 1.75, color: '#3a3835', margin: 0 }}
+            />
           </Section>
         )}
 
         {cv.education.length > 0 && (
           <Section title="Education" color={c}>
-            {cv.education.map((edu) => (
+            {cv.education.map((edu, i) => (
               <div key={edu.id} style={{ marginBottom: '10px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 500 }}>{edu.degree}</div>
-                  <div style={{ fontSize: '11px', color: '#9e9a91', fontStyle: 'italic' }}>{edu.period}</div>
-                </div>
-                <div style={{ fontSize: '12px', color: '#6e6b63', fontStyle: 'italic', marginTop: '1px' }}>
-                  {edu.institution}
-                </div>
-                {edu.coursework && (
-                  <div style={{ fontSize: '11.5px', color: '#5a5751', marginTop: '4px', lineHeight: 1.6 }}>
-                    Relevant coursework: {edu.coursework}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px' }}>
+                  <Editable
+                    field={`education.${i}.degree`}
+                    value={edu.degree}
+                    as="div"
+                    style={{ fontSize: '13px', fontWeight: 500 }}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexShrink: 0 }}>
+                    <Editable
+                      field={`education.${i}.period`}
+                      value={edu.period}
+                      as="div"
+                      style={{ fontSize: '11px', color: '#9e9a91', fontStyle: 'italic' }}
+                    />
+                    <button
+                      type="button"
+                      data-remove-field={`education.${i}`}
+                      aria-label={`Remove ${edu.degree || 'education'} entry`}
+                      style={{
+                        border: 'none',
+                        background: 'none',
+                        cursor: 'pointer',
+                        color: '#9e9a91',
+                        fontSize: '12px',
+                        lineHeight: 1,
+                        padding: '1px 2px',
+                        borderRadius: '3px',
+                        alignSelf: 'center',
+                      }}
+                    >
+                      ✕
+                    </button>
                   </div>
+                </div>
+                <Editable
+                  field={`education.${i}.institution`}
+                  value={edu.institution}
+                  as="div"
+                  style={{ fontSize: '12px', color: '#6e6b63', fontStyle: 'italic', marginTop: '1px' }}
+                />
+                {edu.coursework && (
+                  <Editable
+                    field={`education.${i}.coursework`}
+                    value={`Relevant coursework: ${edu.coursework}`}
+                    as="div"
+                    style={{ fontSize: '11.5px', color: '#5a5751', marginTop: '4px', lineHeight: 1.6 }}
+                  />
                 )}
               </div>
             ))}
@@ -100,8 +141,28 @@ export const EmbeddedTemplate: React.FC<Props> = ({ cv }) => {
           <Section title="Technical Skills" color={c}>
             <ul style={{ margin: 0, paddingLeft: '18px' }}>
               {cv.skills.map((s, i) => (
-                <li key={i} style={{ fontSize: '12px', color: '#3a3835', lineHeight: 1.7 }}>
-                  {s}
+                <li key={i} style={{ position: 'relative', fontSize: '12px', color: '#3a3835', lineHeight: 1.7 }}>
+                  <Editable field={`skills.${i}.name`} value={s.name} />
+                  <button
+                    type="button"
+                    data-remove-field={`skills.${i}`}
+                    aria-label={`Remove skill ${s.name}`}
+                    style={{
+                      position: 'absolute',
+                      top: '2px',
+                      right: '0',
+                      border: 'none',
+                      background: 'none',
+                      cursor: 'pointer',
+                      color: '#9e9a91',
+                      fontSize: '12px',
+                      lineHeight: 1,
+                      padding: '1px 2px',
+                      borderRadius: '3px',
+                    }}
+                  >
+                    ✕
+                  </button>
                 </li>
               ))}
             </ul>
@@ -110,16 +171,16 @@ export const EmbeddedTemplate: React.FC<Props> = ({ cv }) => {
 
         {cv.projects && cv.projects.length > 0 && (
           <Section title="Relevant Projects" color={c}>
-            {cv.projects.map((p) => (
-              <EntryBlock key={p.id} entry={p} color={c} />
+            {cv.projects.map((p, i) => (
+              <EntryBlock key={p.id} path={`projects.${i}`} entry={p} color={c} />
             ))}
           </Section>
         )}
 
         {cv.research && cv.research.length > 0 && (
           <Section title="Research Experience" color={c}>
-            {cv.research.map((r) => (
-              <EntryBlock key={r.id} entry={r} color={c} />
+            {cv.research.map((r, i) => (
+              <EntryBlock key={r.id} path={`research.${i}`} entry={r} color={c} />
             ))}
           </Section>
         )}
@@ -128,8 +189,28 @@ export const EmbeddedTemplate: React.FC<Props> = ({ cv }) => {
           <Section title="Additional Projects" color={c}>
             <ul style={{ margin: 0, paddingLeft: '18px' }}>
               {cv.additional.map((a, i) => (
-                <li key={i} style={{ fontSize: '12px', color: '#3a3835', lineHeight: 1.7 }}>
-                  {a}
+                <li key={i} style={{ position: 'relative', fontSize: '12px', color: '#3a3835', lineHeight: 1.7 }}>
+                  <Editable field={`additional.${i}`} value={a} />
+                  <button
+                    type="button"
+                    data-remove-field={`additional.${i}`}
+                    aria-label={`Remove additional project ${a}`}
+                    style={{
+                      position: 'absolute',
+                      top: '2px',
+                      right: '0',
+                      border: 'none',
+                      background: 'none',
+                      cursor: 'pointer',
+                      color: '#9e9a91',
+                      fontSize: '12px',
+                      lineHeight: 1,
+                      padding: '1px 2px',
+                      borderRadius: '3px',
+                    }}
+                  >
+                    ✕
+                  </button>
                 </li>
               ))}
             </ul>
@@ -137,35 +218,69 @@ export const EmbeddedTemplate: React.FC<Props> = ({ cv }) => {
         )}
 
         <Section title="References" color={c} noBorder>
-          <p style={{ fontSize: '12px', color: '#5a5751', margin: 0 }}>
-            {cv.referencesNote || 'Available upon request.'}
-          </p>
+          <Editable
+            field="referencesNote"
+            value={cv.referencesNote || 'Available upon request.'}
+            as="p"
+            style={{ fontSize: '12px', color: '#5a5751', margin: 0 }}
+          />
         </Section>
       </div>
     </div>
   );
 };
 
-const EntryBlock: React.FC<{ entry: EntrySection; color: string }> = ({ entry, color }) => (
-  <div style={{ marginBottom: '16px' }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+const EntryBlock: React.FC<{ path: string; entry: EntrySection; color: string }> = ({ path, entry, color }) => (
+  <div style={{ position: 'relative', marginBottom: '16px' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px' }}>
       <div style={{ fontSize: '13px', fontWeight: 500 }}>
-        {entry.title}
+        <Editable field={`${path}.title`} value={entry.title} />
         {entry.org && (
-          <span style={{ fontWeight: 400, color: '#6e6b63' }}> &nbsp;|&nbsp; {entry.org}</span>
+          <Editable
+            field={`${path}.org`}
+            value={` | ${entry.org}`}
+            style={{ fontWeight: 400, color: '#6e6b63' }}
+          />
         )}
       </div>
-      {entry.period && (
-        <div style={{ fontSize: '11px', color: '#9e9a91', fontStyle: 'italic', whiteSpace: 'nowrap' }}>
-          {entry.period}
-        </div>
-      )}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexShrink: 0 }}>
+        {entry.period && (
+          <Editable
+            field={`${path}.period`}
+            value={entry.period}
+            as="div"
+            style={{ fontSize: '11px', color: '#9e9a91', fontStyle: 'italic', whiteSpace: 'nowrap' }}
+          />
+        )}
+        <button
+          type="button"
+          data-remove-field={path}
+          aria-label={`Remove ${entry.title || 'entry'}`}
+          style={{
+            border: 'none',
+            background: 'none',
+            cursor: 'pointer',
+            color: '#9e9a91',
+            fontSize: '12px',
+            lineHeight: 1,
+            padding: '1px 2px',
+            borderRadius: '3px',
+            alignSelf: 'center',
+          }}
+        >
+          ✕
+        </button>
+      </div>
     </div>
     <ul style={{ margin: '4px 0 0', paddingLeft: '18px' }}>
       {entry.bullets.map((b, i) => (
-        <li key={i} style={{ fontSize: '12px', lineHeight: 1.7, color: '#5a5751' }}>
-          {b}
-        </li>
+        <Editable
+          key={i}
+          field={`${path}.bullets.${i}`}
+          value={b}
+          as="li"
+          style={{ fontSize: '12px', lineHeight: 1.7, color: '#5a5751' }}
+        />
       ))}
     </ul>
   </div>

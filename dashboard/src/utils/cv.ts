@@ -31,7 +31,7 @@ export function generatedCvToCVData(
       period: e.period,
       coursework: e.description || undefined,
     })),
-    skills: profile?.skills ?? [],
+    skills: (profile?.skills ?? []).map((name) => ({ name })),
     accentColor: '#2c4a3e',
     // Derived for templates (e.g. EmbeddedTemplate) that want projects and
     // work/research experience as separate sections instead of one merged
