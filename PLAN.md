@@ -572,6 +572,137 @@ across all four Lambdas. See `TESTING.md`.
   endpoint: `generated_cv.education[0].description` now matches the
   profile's coursework list.
 
+- ✅ **A4-aware pagination + honest multi-page PDF export.** Until now the
+  templates rendered as one endless 210mm sheet (so there was no visual hint
+  where a page would cut) and `exportPDF.ts` rasterized the *whole* sheet and
+  squashed it onto a single A4 page regardless of length. Both are fixed with
+  a small client-side fragmentation pass rather than depending on browser
+  paged-media support (which doesn't exist for arbitrary HTML):
+  - `utils/paginate.ts` measures the rendered `.cv-sheet` off-screen, walks it
+    using marker classes (`cv-sheet` / `cv-columns` / `cv-column` / `cv-flow`),
+    and splits its content into page-sized clumps of unbreakable fragments
+    (break-inside: avoid — a section/entry moves whole to the next page rather
+    than being sliced mid-text; only a unit taller than a full page gets broken
+    at its own children so nothing is silently dropped). Two-column templates
+    paginate each column independently and the results are zipped by page — the
+    Modern template's sidebar rail persists on continuation pages.
+  - `components/PaginatedCV.tsx` (wired into `CVBuilderPage` in place of the
+    raw template render) lays the template out once out of view, then clones
+    fragments into fixed 210×297mm `.cv-page` frames with a "Page N of M"
+    caption. The builder now shows exactly how many pages a CV spans and where
+    each cut falls; template switching stays instant (per-template measure).
+  - `utils/exportPDF.ts` prints each `.cv-page` frame onto its own full A4 PDF
+    page instead of stretching everything into one — so the exported PDF is
+    pixel-identical to the on-screen preview. Rasterization at 2× (~190 DPI on
+    A4) keeps multi-page exports ~10MB/page rather than ~25MB.
+  - `ModernTemplate`/`EmbeddedTemplate`/`ClassicTemplate` carry the marker
+    classes; `ModernTemplate`'s Experience/Education sections were mildly
+    restructured so entries (not whole sections) are the fragmentation
+    granularity.
+  - Self-verified with a headless browser against the local dev server (a
+    2-page Modern, a 3-page Embedded, and a 1-page "fits on A4" case): page
+    frames measured exactly 794×1123px, zero `scrollHeight` overflow on every
+    page, total text content preserved across pages, and the exported PDF's
+    `/Count` matches the on-screen page count. Final manual confirmation still
+    outstanding under the repo's testing workflow.
+
+- ✅ **Editable CV text with two-way sync between the review form and the A4
+  previews.** Every text section — name, contact, summary, skills, experience,
+  education, and the Embedded template's project/research bullets,
+  additional items, and references note — can be edited from either side and
+  both always agree:
+  - Each text node stamps a dot-path into the CV (`data-field`, e.g.
+    `experience.2.role`, `skills.0.name`, `projects.1.bullets.2`) via a small
+    `components/editable.tsx` helper (`Editable { field, value, as }`).
+    `utils/cvEdits.ts` provides `setFieldByPath`/`getFieldByPath` to read and
+    write those paths into `CVData` (numeric segments index arrays).
+  - The store gained `updateCV(jobId, updater)` (`useCVStore.ts`), which applies
+    the edit to the persisted CV with immer's `produce` and updates
+    `viewerCv` if that job is on screen, so the form and previews re-render
+    and localStorage is kept in sync on every keystroke.
+  - Left panel (`CVViewer`) is now a controlled form: each input/textarea is
+    bound to a path and dispatches `updateCV` on change. The preview pages are
+    *cloned* DOM (React only renders the off-screen measurer), so in-place
+    editing is wired imperatively in `PaginatedCV`: a delegated `input`
+    listener on the frames container reads `textContent` from the
+    `[data-field]` element being edited, reports it via a new `onEdit` prop,
+    and after the store-triggered rebuild restores the caret to the same
+    character offset (Edit-forward: the field keeps focus and the cursor never
+    jumps, even mid-string). `CVBuilderPage` routes preview edits through the
+    same `updateCV` as the form.
+  - Editable spans get a soft dashed outline on hover/focus so it's obvious
+    where you can click to type. Modern's contact items were restructured so
+    only the value (not the phone/location icon) is editable; the Embedded
+    `EntryBlock` takes a `path` prop so project/research titles, orgs, periods,
+    and bullets are all editable. Classic stays a stub, but its name/title/
+    summary are editable too.
+  - Skills also support add/remove, not just re-labeling, via the dot-path
+    helpers `removeAtPath`/`pushArrayItem` in `utils/cvEdits.ts`: an
+    "+ Add skill" button and per-skill ✕ in the left form, plus a per-skill ✕
+    on the preview pages (revealed on hover, hidden in the rasterized PDF
+    export). Removing the last skill hides the section; adding revives it.
+  - The same add/remove applies to the other list sections: experience and
+    education get "+ Add" buttons in the form and a hover ✕ on every entry
+    block in the preview, and the Embedded template's project/research entries
+    and additional items are removable from the preview too. New entries are
+    appended empty (fresh `id`), so you type straight into either panel.
+  - Self-verified with a headless browser against the local dev server (Modern
+    long + Embedded long + Classic switch): left→preview and preview→left edits
+    propagate on the same keystroke, localStorage matches, caret stays in the
+    edited field after a mid-string insert, 2/3-page pagination still holds,
+    and there were no console/page errors. Final manual confirmation still
+    outstanding under the repo's testing workflow.
+  - **Pagination hardening against live typing.** Two CSS rules in
+    `PaginatedCV` fix what typing exposed: long unbroken words used to expand
+    the flex column (a single 300+ char word ballooned the summary column to
+    2270px), which the fixed-width page then clipped and which corrupted
+    subsequent page splits once whitespace arrived. Now `[data-field]` uses
+    `overflow-wrap: anywhere` (`word-break: break-word`) and the flex
+    columns/flow containers are `min-width: 0`, so words break at the column
+    edge and the layout never outgrows the 210mm sheet. Self-verified: long
+    word wraps in place (0 overflow on both axes), and a 1.5k-word paste onto
+    a 14-entry CV repaginates to 2 pages with zero content loss.
+  - **Pagination hardening: vertical margins/padding and browser line-breaks.**
+    Two more `paginate.ts` fixes closed clipping bugs typing exposed. First,
+    the fit budget measured only border-box heights, so real vertical margins
+    and `paddingTop` (on `cv-column`s and the Embedded `cv-flow`) pushed the
+    previous entry past the page edge — the last entry on a full page got
+    clipped. `paginate.ts` now accounts for margin boxes (`flowAdvance`) and
+    column padding (`paddingTopOf`) when splitting. Second, newlines entered
+    with the browser's line-break (Enter) inserted empty block elements that
+    `textContent` read-backs silently dropped, so the store never updated, no
+    re-pagination ran, and the field grew past its fixed page frame until it
+    clipped. `PaginatedCV` now reads `innerText` (which reflects the browser's
+    own line breaks) and `Editable` renders with `white-space: pre-wrap`, so
+    newlines round-trip through the store and the pages re-flow. Self-verified
+    with a headless browser: 25 Enters into a description stored all 26
+    newlines, pages re-flowed with zero clipped fields, and long-word typing
+    still repaginates cleanly.
+  - **Optional per-skill levels (Modern template only).** `CVData.skills` went
+    from `string[]` to `{ name, level? }[]` (`SkillEntry`). The Modern
+    template's skill bar now reflects the real level — width = `level × 10%`
+    on a 1–10 scale — and is hidden entirely when `level` is unset (no more
+    decorative fake bars). Embedded/Classic are unchanged and ignore
+    `level`. The left form (`CVViewer`) got a per-skill level `<select>`
+    (`None` + 1–10); picking `None` deletes the level. Because this changed
+    the persisted schema, the store's localStorage key bumped
+    `cv_tailor_dir_v1` → `cv_tailor_dir_v2` and old cached CVs are
+    intentionally discarded (regenerate rather than migrate); `loadDir`
+    defensively normalizes any stray v2 `skills` entries. Profile-level
+    `StoredProfile.skills` stays `string[]` (backend schema) and is mapped to
+    `SkillEntry[]` in `generatedCvToCVData`, so newly generated CVs start
+    level-less. Self-verified headlessly: bars render/hide per level, setting
+    a level via the panel updates the bar, add/remove of skills keeps working,
+    all three templates render with zero clipped fields.
+  - **Fast server-free testing added:** `npm test` runs Vitest on the pure
+    dot-path edit helpers (`utils/cvEdits.ts` — `setFieldByPath` /
+    `getFieldByPath` / `removeAtPath` / `pushArrayItem`) as `cvEdits.test.ts`;
+    no dev server, no browser, ~0.5 s. Test files are excluded from the
+    `tsc` build via `tsconfig.json`. (Vitest lives outside `dashboard/
+    node_modules` in this WSL workspace because `npm install` on the
+    `/mnt/d` DrvFs mount fails on the native-binary rename; on a normal host
+    `npm i -D vitest` works.)
+
 Still to do: deciding what happens to the stale
 `CVBuilderPage`/`MyCVsPage`/`cvApi.ts`, and (smaller) `/tailor-preview`
 (the free keyword-only route) isn't wired into the frontend anywhere yet —
@@ -660,7 +791,12 @@ User-proposed, captured here for later. Not designed or scoped yet.
 
 - ⏸ **ATS-safe export.** `exportPDF.ts` rasterizes the CV via `html2canvas` into a
   PNG-in-a-PDF (no extractable text), and `ModernTemplate.tsx` is two-column —
-  both defeat "ATS-friendly" regardless of AI content. Now tracked with full
+  both defeat "ATS-friendly" regardless of AI content. (Since the A4-pagination
+  work above, the file is at least honest about page breaks — one real A4 page
+  per on-screen frame, no stretching — but it's still an image-in-a-PDF, so
+  `text()` extraction in a real ATS will still come back empty. Getting actual
+  selectable text means generating the PDF by writing vector/text primitives
+  instead of a screenshot — that's the remaining gap.) Now tracked with full
   context under **Future improvements #4**.
 - ⏸ **CV persistence.** Dropped along with `cv-service`. No backend for
   saving/loading a generated or edited CV until the dashboard redesign defines a

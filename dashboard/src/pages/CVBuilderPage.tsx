@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CVViewer } from '../components/CVViewer';
 import { Shell } from '../components/Shell';
@@ -6,7 +6,9 @@ import { useCVStore, TailoredCVEntry } from '../store/useCVStore';
 import { Button, Notice, PanelCard, SectionTitle } from '../components/ui';
 import { exportToPDF } from '../utils/exportPDF';
 import { generateTailoredCV, getProfile } from '../api/backend';
-import { TEMPLATES, getTemplate } from '../components/templates';
+import { setFieldByPath, removeAtPath } from '../utils/cvEdits';
+import { TEMPLATES } from '../components/templates';
+import { PaginatedCV } from '../components/PaginatedCV';
 
 const formatDate = (iso: string) => {
   if (!iso) return 'earlier session';
@@ -26,10 +28,36 @@ export const CVBuilderPage: React.FC = () => {
   const selectCV = useCVStore((state) => state.selectCV);
   const saveGeneratedCV = useCVStore((state) => state.saveGeneratedCV);
   const setTemplate = useCVStore((state) => state.setTemplate);
+  const updateCV = useCVStore((state) => state.updateCV);
 
   const [exporting, setExporting] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
+  const [paginationReady, setPaginationReady] = useState(false);
+  const [pageCount, setPageCount] = useState(0);
+
+  const handlePages = useCallback((pageCount: number) => {
+    setPageCount(pageCount);
+    setPaginationReady(true);
+  }, []);
+
+  // In-place edits on the preview pages funnel into the same store action as
+  // the left panel's textboxes, keeping both sides and localStorage in sync.
+  const handleCVEdit = useCallback(
+    (path: string, value: string) => {
+      if (!viewerJobId) return;
+      updateCV(viewerJobId, (draft) => setFieldByPath(draft, path, value));
+    },
+    [viewerJobId, updateCV],
+  );
+
+  const handleCVRemove = useCallback(
+    (path: string) => {
+      if (!viewerJobId) return;
+      updateCV(viewerJobId, (draft) => removeAtPath(draft, path));
+    },
+    [viewerJobId, updateCV],
+  );
 
   const sorted = [...cvs].sort((a, b) => b.generatedAt.localeCompare(a.generatedAt));
 
@@ -78,7 +106,7 @@ export const CVBuilderPage: React.FC = () => {
               <Button variant="ghost" onClick={handleRegenerate} disabled={regenerating || exporting}>
                 {regenerating ? 'Regenerating…' : 'Regenerate'}
               </Button>
-              <Button onClick={handleExport} disabled={exporting || regenerating}>
+              <Button onClick={handleExport} disabled={exporting || regenerating || !paginationReady}>
                 {exporting ? 'Exporting…' : 'Export PDF'}
               </Button>
             </div>
@@ -138,13 +166,23 @@ export const CVBuilderPage: React.FC = () => {
 
           <div className="flex items-start gap-6">
             <CVViewer />
-            <div className="flex flex-1 justify-center">
+            <div className="flex flex-1 flex-col">
               <div id="cv-preview">
-                {(() => {
-                  const SelectedTemplate = getTemplate(viewerTemplateId).component;
-                  return <SelectedTemplate cv={viewerCv} />;
-                })()}
+                <PaginatedCV
+                  cv={viewerCv}
+                  templateId={viewerTemplateId}
+                  onPages={handlePages}
+                  onEdit={handleCVEdit}
+                  onRemove={handleCVRemove}
+                />
               </div>
+              {paginationReady && (
+                <div className="mt-2 text-center text-[11px] text-ink-muted">
+                  {pageCount > 1
+                    ? `Spans ${pageCount} A4 pages — content after the first page continues below`
+                    : 'Fits on a single A4 page'}
+                </div>
+              )}
             </div>
           </div>
         </>

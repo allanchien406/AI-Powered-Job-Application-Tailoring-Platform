@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { CVData, JobRef } from '../types';
+import { produce, Draft } from 'immer';
+import { CVData, JobRef, SkillEntry } from '../types';
 import { GeneratedCV, StoredProfile } from '../api/backend';
 import { generatedCvToCVData } from '../utils/cv';
 import { DEFAULT_TEMPLATE_ID } from '../components/templates';
@@ -32,18 +33,42 @@ interface AppStore {
   selectCV: (jobId: string) => void;
   getCVForJob: (jobId: string) => TailoredCVEntry | undefined;
   setTemplate: (jobId: string, templateId: string) => void;
+  /** Apply an in-place edit to a stored CV. Callers mutate the `draft` (see
+   * `setFieldByPath` in utils/cvEdits.ts) and the result is persisted + made
+   * the active viewer CV if that job is open. */
+  updateCV: (jobId: string, updater: (draft: Draft<CVData>) => void) => void;
 }
 
 const EMAIL_KEY = 'cv_email';
 // One cached CV per saved job, so re-tailoring an unedited job opens the
 // existing result instead of regenerating it. Versioned so a schema change
-// can invalidate old persisted data cleanly.
-const DIR_STORAGE_KEY = 'cv_tailor_dir_v1';
-const OLD_VIEWER_STORAGE_KEY = 'cv_tailor_viewer_v1';
+// can invalidate old persisted data cleanly. v1→v2: `skills` became
+// `{ name, level? }` — the decision was to regenerate rather than migrate,
+// so v1 data is intentionally discarded.
+const DIR_STORAGE_KEY = 'cv_tailor_dir_v2';
 
 interface PersistedDir {
   cvs: TailoredCVEntry[];
   viewerJobId: string | null;
+}
+
+/** Coerce any persisted `skills` into the `{ name, level? }` shape — guards
+ * against stale v2 writes with string entries or out-of-range levels. */
+function normalizeSkills(skills: unknown): SkillEntry[] {
+  if (!Array.isArray(skills)) return [];
+  return skills.map((s): SkillEntry => {
+    if (typeof s === 'string') return { name: s };
+    const entry = (s ?? {}) as { name?: unknown; level?: unknown };
+    const name = typeof entry.name === 'string' ? entry.name : '';
+    const level =
+      typeof entry.level === 'number' &&
+      Number.isFinite(entry.level) &&
+      entry.level >= 1 &&
+      entry.level <= 10
+        ? Math.round(entry.level)
+        : undefined;
+    return level === undefined ? { name } : { name, level };
+  });
 }
 
 function loadDir(): PersistedDir {
@@ -52,40 +77,17 @@ function loadDir(): PersistedDir {
     if (raw) {
       const parsed = JSON.parse(raw) as PersistedDir;
       // Entries persisted before templateId existed don't have one — default them.
-      return { ...parsed, cvs: parsed.cvs.map((c) => ({ ...c, templateId: c.templateId ?? DEFAULT_TEMPLATE_ID })) };
+      return {
+        ...parsed,
+        cvs: parsed.cvs.map((c) => ({
+          ...c,
+          templateId: c.templateId ?? DEFAULT_TEMPLATE_ID,
+          cv: { ...c.cv, skills: normalizeSkills(c.cv.skills) },
+        })),
+      };
     }
   } catch {
-    // fall through to migration below
-  }
-  // One-time migration from the old single-viewer format.
-  try {
-    const raw = localStorage.getItem(OLD_VIEWER_STORAGE_KEY);
-    if (raw) {
-      const old = JSON.parse(raw);
-      if (old?.viewerCv && old?.viewerMeta) {
-        const migrated: PersistedDir = {
-          cvs: [
-            {
-              jobId: '',
-              meta: old.viewerMeta,
-              jobRef: { company_name: '', job_title: '', raw_description: '' },
-              cv: old.viewerCv,
-              generatedAt: '',
-              templateId: DEFAULT_TEMPLATE_ID,
-            },
-          ],
-          viewerJobId: '',
-        };
-        try {
-          localStorage.setItem(DIR_STORAGE_KEY, JSON.stringify(migrated));
-        } catch {
-          // ignore — in-memory state still works
-        }
-        return migrated;
-      }
-    }
-  } catch {
-    // ignore
+    // fall through to a fresh directory
   }
   return { cvs: [], viewerJobId: null };
 }
@@ -131,7 +133,6 @@ export const useCVStore = create<AppStore>((set, get) => ({
     await signOut();
     localStorage.removeItem(EMAIL_KEY);
     localStorage.removeItem(DIR_STORAGE_KEY);
-    localStorage.removeItem(OLD_VIEWER_STORAGE_KEY);
     set({ email: '', cvs: [], viewerCv: null, viewerMeta: null, viewerJobId: null, viewerTemplateId: DEFAULT_TEMPLATE_ID });
   },
 
@@ -171,5 +172,16 @@ export const useCVStore = create<AppStore>((set, get) => ({
       cvs,
       viewerTemplateId: jobId === get().viewerJobId ? templateId : get().viewerTemplateId,
     });
+  },
+
+  updateCV: (jobId, updater) => {
+    const cvs = get().cvs.map((c) => {
+      if (c.jobId !== jobId) return c;
+      return { ...c, cv: produce(c.cv, (draft) => updater(draft)) };
+    });
+    const matched = cvs.find((c) => c.jobId === jobId)?.cv ?? get().viewerCv;
+    const viewerCv = jobId === get().viewerJobId ? matched : get().viewerCv;
+    persist({ cvs, viewerJobId: get().viewerJobId });
+    set({ cvs, viewerCv });
   },
 }));
