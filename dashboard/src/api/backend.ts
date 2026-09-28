@@ -1,4 +1,5 @@
 import { fetchAuthSession } from 'aws-amplify/auth';
+import type { CVData, JobRef } from '../types';
 
 // Client for the deployed backend (profile-service, intake-service, and later
 // job-service / tailoring-service). Replaces the old cvApi.ts, which talked to
@@ -190,4 +191,80 @@ export async function generateTailoredCV(
     method: 'POST',
     body: JSON.stringify({ job_id: jobId }),
   });
+}
+
+// --- Tailored CV persistence -------------------------------------------------
+// A tailored CV is identified by its own `cv_id`, not by the job it was
+// tailored for: a user can hold several versions for the same posting. `job_id`
+// is attribution only. See
+// docs/superpowers/specs/2026-09-27-cv-persistence-design.md.
+
+/** Display labels for the job a CV was tailored for. The dashboard shows these
+ * in the CV list, so they are stored rather than joined from the job. */
+export interface CVMeta {
+  companyName: string;
+  jobTitle: string;
+}
+
+export interface StoredCV {
+  cv_id: string;
+  job_id: string | null;
+  meta: CVMeta;
+  job_ref: JobRef;
+  template_id: string;
+  generated_at: string;
+  updated_at: string;
+  created_at: string;
+  cv: CVData;
+}
+
+/** The subset the dashboard sends back on save. The server stamps
+ * `created_at`/`updated_at` itself — a client clock must not decide them. */
+export interface CVSaveInput {
+  cv_id?: string;
+  job_id: string | null;
+  meta: CVMeta;
+  job_ref: JobRef;
+  template_id: string;
+  generated_at: string;
+  cv: CVData;
+}
+
+export interface CVSaveResult {
+  message: string;
+  cv_id: string;
+  job_id: string | null;
+  generated_at: string;
+  updated_at: string;
+  /** Present only if the server clipped something, e.g. an oversized
+   * `job_ref.raw_description`. The save still succeeded. */
+  warnings?: string[];
+}
+
+/** Create or replace one tailored CV. Omit `cv_id` to create a new one;
+ * include it to update in place (which preserves the server's `created_at`). */
+export async function saveTailoredCV(input: CVSaveInput): Promise<CVSaveResult> {
+  return request<CVSaveResult>('/cv', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+/** Fetch one tailored CV by id. Throws on 404. */
+export async function getTailoredCV(cvId: string): Promise<StoredCV> {
+  return request<StoredCV>(`/cv?cv_id=${encodeURIComponent(cvId)}`);
+}
+
+/** Every tailored CV the signed-in user has, most recently generated first.
+ * Returns full documents (not metadata) so the builder can hydrate in one
+ * round trip. */
+export async function listTailoredCVs(): Promise<StoredCV[]> {
+  const data = await request<{ cvs: StoredCV[] }>('/cv/list');
+  return data.cvs;
+}
+
+/** Delete a tailored CV. Idempotent server-side — deleting one that is already
+ * gone resolves rather than throwing, so a double-click is harmless. */
+export async function deleteTailoredCV(cvId: string): Promise<void> {
+  await request(`/cv?cv_id=${encodeURIComponent(cvId)}`, { method: 'DELETE' });
 }

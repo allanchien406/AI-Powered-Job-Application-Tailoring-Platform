@@ -19,14 +19,13 @@ built · ❓ open decision · ⏸ deferred.
 - **RDS was the wrong store for this data's shape.** `profiles` and
   `job_descriptions` are both single-item-per-key JSON blobs with zero relational
   joins anywhere in the codebase — a DynamoDB shape, not a relational one.
-- **`cv-service` is dropped, not migrated** — the dashboard is getting redesigned,
-  so the current `CVData` persistence isn't worth carrying forward. This means no
-  Lambda needs RDS anymore, so the VPC, security groups, and Secrets Manager
-  interface endpoint come out entirely.
+- **`cv-service` is CRUD-only** — it persists the dashboard's existing `CVData`
+  shape in DynamoDB and makes no Bedrock calls. No Lambda needs RDS anymore, so
+  the VPC, security groups, and Secrets Manager interface endpoint come out.
 
 ## Architecture
 
-Three Lambdas behind one HTTP API, no VPC, two DynamoDB tables:
+Five Lambdas behind one HTTP API, no VPC, three DynamoDB tables:
 
 ```
 API Gateway (HttpApi)
@@ -34,7 +33,8 @@ API Gateway (HttpApi)
  ├─ /job-description       → job-service          (JobDescriptionsTable)
  ├─ /job-description/list  → job-service
  ├─ /tailor-preview        → tailoring-service    (reads both tables, no Bedrock)
- └─ /tailor-generate       → tailoring-service    (reads both tables + Bedrock)
+ ├─ /tailor-generate       → tailoring-service    (reads both tables + Bedrock)
+ └─ /cv, /cv/list          → cv-service            (CvsTable)
 ```
 
 Every route above sits behind a `HttpJwtAuthorizer` — there is no
@@ -94,6 +94,23 @@ item without specifying whose partition to read from, and that partition is
 always the verified JWT `sub`, never a client-supplied value. (This key was
 originally `email`; it was renamed to `user_id` as part of the Cognito
 authentication work — see "Authentication (Cognito)" below.)
+
+### `CvsTable` — 🚧 implemented, pending deployment verification
+
+| | |
+|---|---|
+| Partition key | `user_id` (S, the Cognito `sub`) |
+| Sort key | `cv_id` (S, client-minted UUID) |
+
+The CV service exposes `PUT /cv`, `GET /cv?cv_id=`, `GET /cv/list`, and
+idempotent `DELETE /cv?cv_id=`. It performs CRUD and normalization only; it
+does not call Bedrock. The dashboard keeps a local write-through buffer,
+hydrates by unioning server and local CVs, and autosaves dirty edits with a
+debounce, max-wait, retry, and visibility flush. Generation, template changes,
+and deletion are discrete actions and flush immediately. Multiple versions may
+share a `job_id`; the dashboard filters them client-side because no GSI is
+planned. `updated_at` is shown as the last-edited date while list ordering
+remains `generated_at` descending.
 
 ## Authentication (Cognito) — ✅ implemented and verified
 

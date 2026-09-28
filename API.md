@@ -121,6 +121,41 @@ List every job description saved by a user.
 
 ---
 
+## `cv-service` — 🚧 implemented · deployment verification pending
+
+Source: `infra/lambda/cv-service/index.py`. Storage: `CvsTable` (DynamoDB,
+partition key `user_id`, sort key `cv_id`). Every route derives `user_id` from
+the verified Cognito JWT `sub`; no client-supplied identity is accepted.
+
+### `PUT /cv`
+
+Create a CV when `cv_id` is omitted, or replace one in place when it is
+provided. The server stamps `created_at` and `updated_at`, preserves nested
+entry IDs, and normalizes/caps CV fields so a DynamoDB item stays below 400KB.
+
+- **Body:** `{cv_id?, job_id?, meta, job_ref, template_id, generated_at, cv}`
+- **200:** `{message, cv_id, job_id?, generated_at, updated_at, warnings?}`
+- **Behavior:** missing `job_id` is omitted from the DynamoDB item rather than
+  written as a DynamoDB `NULL` value. `job_ref.raw_description` is capped at
+  20,000 characters and reports a warning when clipped.
+
+### `GET /cv?cv_id=`
+
+Fetch one CV owned by the signed-in user. Missing `cv_id` is **400** and an
+unknown CV is **404**.
+
+### `GET /cv/list`
+
+Returns `{cvs: [...]}` for the signed-in user, ordered by `generated_at`
+descending. Filtering by `job_id` is client-side because no GSI is used.
+
+### `DELETE /cv?cv_id=`
+
+Deletes one CV owned by the signed-in user. The operation is idempotent and
+returns **200** even when the item is already absent.
+
+---
+
 ## `tailoring-service` — ✅ reviewed and deployed (fixed: email normalization,
 graceful degradation on embedding failure, defensive markdown-fence parsing,
 correct Claude Haiku 4.5 model ID + IAM ARNs, generation fabricating an

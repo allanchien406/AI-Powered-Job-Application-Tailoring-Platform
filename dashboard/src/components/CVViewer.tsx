@@ -13,31 +13,31 @@ import { Field, Input, TextArea } from './ui';
 export const CVViewer: React.FC = () => {
   const cv = useCVStore((state) => state.viewerCv);
   const viewerMeta = useCVStore((state) => state.viewerMeta);
-  const viewerJobId = useCVStore((state) => state.viewerJobId);
+  const viewerCvId = useCVStore((state) => state.viewerCvId);
   const updateCV = useCVStore((state) => state.updateCV);
 
   const set = useCallback(
     (path: string, value: string) => {
-      if (!viewerJobId) return;
-      updateCV(viewerJobId, (draft) => setFieldByPath(draft, path, value));
+      if (!viewerCvId) return;
+      updateCV(viewerCvId, (draft) => setFieldByPath(draft, path, value));
     },
-    [viewerJobId, updateCV],
+    [viewerCvId, updateCV],
   );
 
   const removeSkill = (i: number) => {
-    if (!viewerJobId) return;
-    updateCV(viewerJobId, (draft) => removeAtPath(draft, `skills.${i}`));
+    if (!viewerCvId) return;
+    updateCV(viewerCvId, (draft) => removeAtPath(draft, `skills.${i}`));
   };
 
   const addSkill = () => {
-    if (!viewerJobId) return;
-    updateCV(viewerJobId, (draft) => pushArrayItem(draft, 'skills', { name: '' }));
+    if (!viewerCvId) return;
+    updateCV(viewerCvId, (draft) => pushArrayItem(draft, 'skills', { name: '' }));
   };
 
   const setSkillLevel = useCallback(
     (i: number, raw: string) => {
-      if (!viewerJobId) return;
-      updateCV(viewerJobId, (draft) => {
+      if (!viewerCvId) return;
+      updateCV(viewerCvId, (draft) => {
         const entry = draft.skills[i];
         if (!entry) return;
         if (raw === '') {
@@ -48,29 +48,29 @@ export const CVViewer: React.FC = () => {
         }
       });
     },
-    [viewerJobId, updateCV],
+    [viewerCvId, updateCV],
   );
 
   const removeEntry = (list: string, i: number) => {
-    if (!viewerJobId) return;
-    updateCV(viewerJobId, (draft) => removeAtPath(draft, `${list}.${i}`));
+    if (!viewerCvId) return;
+    updateCV(viewerCvId, (draft) => removeAtPath(draft, `${list}.${i}`));
   };
 
   const addExperience = () => {
-    if (!viewerJobId) return;
-    updateCV(viewerJobId, (draft) => {
+    if (!viewerCvId) return;
+    updateCV(viewerCvId, (draft) => {
       draft.experience.push({ id: uuid(), company: '', role: '', period: '', description: '' });
     });
   };
 
   const addEducation = () => {
-    if (!viewerJobId) return;
-    updateCV(viewerJobId, (draft) => {
+    if (!viewerCvId) return;
+    updateCV(viewerCvId, (draft) => {
       draft.education.push({ id: uuid(), institution: '', degree: '', period: '' });
     });
   };
 
-  if (!cv || !viewerJobId) return null;
+  if (!cv || !viewerCvId) return null;
 
   return (
     <div className="w-[360px] min-w-[320px] self-start rounded-xl border border-sand bg-white p-[18px] shadow-card">
