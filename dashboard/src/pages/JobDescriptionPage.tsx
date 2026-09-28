@@ -32,7 +32,7 @@ type PreviewState = {
 export const JobDescriptionPage: React.FC = () => {
   const navigate = useNavigate();
   const email = useCVStore((state) => state.email);
-  const getCVForJob = useCVStore((state) => state.getCVForJob);
+  const getCVsForJob = useCVStore((state) => state.getCVsForJob);
   const saveGeneratedCV = useCVStore((state) => state.saveGeneratedCV);
   const selectCV = useCVStore((state) => state.selectCV);
 
@@ -149,13 +149,16 @@ export const JobDescriptionPage: React.FC = () => {
     }
   };
 
+  /** `force` is the explicit "Generate another version" path: it skips the
+   * short-circuit to an existing CV and always forks a new `cvId`, so
+   * comparing attempts at the same posting is possible. */
   const handleGenerate = async (job: StoredJobDescription, force = false) => {
-    // A cached CV is only a true match if the job is unchanged since it was
+    // An existing CV is only a true match if the job is unchanged since it was
     // tailored — otherwise the cached result would be stale and we regenerate.
-    // `force` skips this short-circuit entirely, for an explicit Regenerate click.
-    const cached = getCVForJob(job.job_id);
-    if (!force && cached && isJobRefMatching(cached.jobRef, jobRefOf(job))) {
-      selectCV(job.job_id);
+    const existing = getCVsForJob(job.job_id);
+    const freshest = existing[0];
+    if (!force && freshest && isJobRefMatching(freshest.jobRef, jobRefOf(job))) {
+      selectCV(freshest.cvId);
       navigate('/builder');
       return;
     }
@@ -191,7 +194,9 @@ export const JobDescriptionPage: React.FC = () => {
   };
 
   const handleOpenInEditor = (job: StoredJobDescription) => {
-    selectCV(job.job_id);
+    const freshest = getCVsForJob(job.job_id)[0];
+    if (!freshest) return;
+    selectCV(freshest.cvId);
     navigate('/builder');
   };
 
@@ -239,8 +244,11 @@ export const JobDescriptionPage: React.FC = () => {
           <div className="text-xs text-ink-muted">No jobs saved yet — add one above.</div>
         )}
         {jobs.map((job) => {
-          const cachedCv = getCVForJob(job.job_id);
-          const canViewCached = !!cachedCv && isJobRefMatching(cachedCv.jobRef, jobRefOf(job));
+          const cvsForJob = getCVsForJob(job.job_id);
+          const freshest = cvsForJob[0];
+          const canViewCached = !!freshest && isJobRefMatching(freshest.jobRef, jobRefOf(job));
+          const isGenerating =
+            generateState?.jobId === job.job_id && generateState.status === 'generating';
           return (
           <Card key={job.job_id}>
             {editingId === job.job_id ? (
@@ -291,7 +299,14 @@ export const JobDescriptionPage: React.FC = () => {
               <div className="flex items-start justify-between gap-2.5">
                 <div>
                   <div className="text-[13px] font-medium">{job.job_title}</div>
-                  <div className="text-xs text-ink-soft">{job.company_name}</div>
+                  <div className="text-xs text-ink-soft">
+                    {job.company_name}
+                    {cvsForJob.length > 0 && (
+                      <span className="ml-1.5 text-forest">
+                        · {cvsForJob.length} tailored CV{cvsForJob.length === 1 ? '' : 's'}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex shrink-0 gap-2">
                   <Button variant="ghost" onClick={() => startEdit(job)} className="whitespace-nowrap">
@@ -309,10 +324,10 @@ export const JobDescriptionPage: React.FC = () => {
                   </Button>
                   <Button
                     onClick={() => handleGenerate(job)}
-                    disabled={generateState?.jobId === job.job_id && generateState.status === 'generating'}
+                    disabled={isGenerating}
                     className="whitespace-nowrap"
                   >
-                    {generateState?.jobId === job.job_id && generateState.status === 'generating'
+                    {isGenerating
                       ? 'Tailoring…'
                       : canViewCached
                         ? 'View tailored CV'
@@ -322,12 +337,10 @@ export const JobDescriptionPage: React.FC = () => {
                     <Button
                       variant="ghost"
                       onClick={() => handleGenerate(job, true)}
-                      disabled={generateState?.jobId === job.job_id && generateState.status === 'generating'}
+                      disabled={isGenerating}
                       className="whitespace-nowrap"
                     >
-                      {generateState?.jobId === job.job_id && generateState.status === 'generating'
-                        ? 'Regenerating…'
-                        : 'Regenerate'}
+                      {isGenerating ? 'Tailoring…' : 'Generate another version'}
                     </Button>
                   )}
                 </div>
@@ -347,7 +360,7 @@ export const JobDescriptionPage: React.FC = () => {
                 generatedCv={result.generatedCv}
                 job={job}
                 profile={profile}
-                templateId={getCVForJob(job.job_id)?.templateId}
+                templateId={freshest?.templateId}
                 onOpen={() => handleOpenInEditor(job)}
               />
             )}

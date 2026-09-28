@@ -8,6 +8,25 @@ newest-first (`tailoring-service`, the most recently worked on, first).
 **Environment for all of this:** staged deploy branch `test/deploy-profile-service`,
 API base URL `https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com`.
 
+## CV persistence verification
+
+Focused local checks for the CV persistence slice:
+
+```text
+python -m py_compile infra/lambda/cv-service/index.py
+python /tmp/opencode/cvnorm_check.py
+python /tmp/opencode/cvhandler_check.py
+cd dashboard && npm run build
+cd dashboard && npm test -- --run src/utils/cvSync.test.ts
+```
+
+The CV handler checks cover JWT-derived ownership, create/update/list/get,
+nullable `job_id`, normalization caps, and idempotent deletion. After deploy,
+the browser flow is: sign in, generate a CV, confirm `Saved to your account`,
+edit and wait for autosave, open the same account in another browser/device
+and confirm the edit appears, generate another version for the same job, then
+delete each version and confirm it is gone after reload.
+
 ---
 
 ## Measuring cost per user (`BEDROCK_USAGE` logging, all four Lambdas)
