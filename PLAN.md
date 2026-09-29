@@ -40,34 +40,33 @@ API Gateway (HttpApi)
 Every route above sits behind a `HttpJwtAuthorizer` — there is no
 unauthenticated route. See "Authentication (Cognito)" below.
 
-### `ProfilesTable` — ✅ implemented
+### `ProfilesTable` — ⏸ superseded by `ProfilesTableV2`, kept as rollback safety net
+
+Single item per user (`PK=user_id`, no sort key). Replaced due to
+embedding-driven item size — see `ProfilesTableV2` below and
+`docs/superpowers/specs/2026-09-28-profile-multi-item-schema-design.md` for
+the full reasoning. Not deleted yet; deletion is a deliberate later
+follow-up once confidence has built up.
+
+### `ProfilesTableV2` — 🚧 implemented, pending deployment verification
 
 | | |
 |---|---|
 | Partition key | `user_id` (S, the Cognito `sub`) |
-| Sort key | none — one item per user |
+| Sort key | `entity_key` (S — `"PROFILE"` \| `"PROJECT#<id>"` \| `"EXPERIENCE#<id>"`) |
 
 ```json
-{
-  "user_id": "<cognito-sub-uuid>",
-  "email": "allan@example.com",
-  "full_name": "Allan Chien",
-  "skills": ["AWS", "Python", "Docker"],
-  "projects": [
-    { "name": "2048 CI/CD Project", "description": "...", "embedding": [0.02, "..."] }
-  ],
-  "experience": [
-    { "title": "Research Engineer", "company": "Bittide Labs", "description": "...", "embedding": [0.09, "..."] }
-  ],
-  "created_at": "2026-01-04T10:22:31Z",
-  "updated_at": "2026-09-05T03:10:02Z"
-}
+{"user_id": "<cognito-sub-uuid>", "entity_key": "PROFILE", "email": "allan@example.com", "full_name": "Allan Chien", "skills": ["AWS", "Python", "Docker"], "education": [], "created_at": "2026-01-04T10:22:31Z", "updated_at": "2026-09-28T03:10:02Z"}
+{"user_id": "<cognito-sub-uuid>", "entity_key": "PROJECT#3f1c9e2a-...", "id": "3f1c9e2a-...", "name": "2048 CI/CD Project", "period": "2020", "description": "...", "embedding": [0.02, "..."], "order": 0}
+{"user_id": "<cognito-sub-uuid>", "entity_key": "EXPERIENCE#8b0d4e3a-...", "id": "8b0d4e3a-...", "title": "Research Engineer", "company": "Bittide Labs", "period": "2021-2024", "description": "...", "embedding": [0.09, "..."], "order": 0}
 ```
 
-`profile_id` was dropped — nothing downstream ever used it as a key;
-`user_id` (the Cognito `sub`, verified from the JWT on every request) is the
-real identity everywhere. `email` remains as a normal, optional display
-attribute — never used for lookup.
+One `PROFILE` item plus one `PROJECT#<id>`/`EXPERIENCE#<id>` item per entry,
+each independently bounded (~12KB, dominated by its embedding) instead of
+one item whose size scales with the whole profile. A save only rewrites
+entries that actually changed — `attach_embeddings`' existing cache already
+avoided re-*computing* an unchanged entry's embedding, this additionally
+avoids re-*writing* it.
 
 ### `JobDescriptionsTable` — ✅ implemented
 

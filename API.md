@@ -11,8 +11,10 @@ yet reviewed — treat as unverified until it's been gone through.
 
 ## `profile-service` — ✅ reviewed · AWS-verified
 
-Source: `infra/lambda/profile-service/index.py`. Storage: `ProfilesTable`
-(DynamoDB, partition key `email`).
+Source: `infra/lambda/profile-service/index.py`. Storage: `ProfilesTableV2`
+(DynamoDB, partition key `user_id`, sort key `entity_key` — one `PROFILE`
+item plus one `PROJECT#<id>`/`EXPERIENCE#<id>` item per entry; see
+`docs/superpowers/specs/2026-09-28-profile-multi-item-schema-design.md`).
 
 ### `GET /profile`
 
@@ -28,18 +30,21 @@ Fetch a profile by email.
 
 Create or fully replace a profile (upsert by `email`).
 
-- **Body:** `{email, full_name?, skills?: string[], projects?: [{name, period?, description}], experience?: [{title, company?, period?, description}], education?: [{institution, degree, period?, description?}]}`
+- **Body:** `{email, full_name?, skills?: string[], projects?: [{id?, name, period?, description}], experience?: [{id?, title, company?, period?, description}], education?: [{institution, degree, period?, description?}]}`
   — `period` and `company`/`institution` are all optional (blank when unknown).
-  `education` entries get no embedding and aren't used for matching (like
-  `skills`); they pass straight through to the generation prompt.
+  `id` is assigned server-side on first save if omitted, and should be sent
+  back unchanged on later edits. `education` entries get no embedding and
+  aren't used for matching (like `skills`); they pass straight through to
+  the generation prompt.
 - **200:** `{message, ...same shape as GET}`, plus `embedding_warnings: string[]`
   **only if** embedding a new/changed entry failed (save still succeeds either
   way — see `PLAN.md`'s graceful-degradation note)
 - **400:** `email` missing
 - **Behavior worth knowing:** each project/experience entry's embedding is
   computed once and cached; re-saving with an entry's text unchanged reuses
-  the cached vector instead of calling Bedrock again. Matched by `name`/`title`
-  as identity, not array position.
+  the cached vector instead of calling Bedrock again, and the entry's
+  DynamoDB item isn't rewritten at all. Matched by `id` first, falling back
+  to `name`/`title` for an entry that doesn't have an `id` yet.
 
 ---
 
