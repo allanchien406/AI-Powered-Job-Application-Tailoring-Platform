@@ -39,6 +39,18 @@ export class InfraStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT recommended for production environments
     });
 
+    // Multi-item replacement for `profilesTable` -- PK user_id, SK
+    // entity_key ("PROFILE" | "PROJECT#<id>" | "EXPERIENCE#<id>"). See
+    // docs/superpowers/specs/2026-09-28-profile-multi-item-schema-design.md.
+    // `profilesTable` above is kept, unused once cutover lands, as a
+    // rollback safety net -- do not delete it here.
+    const profilesTableV2 = new dynamodb.Table(this, "ProfilesTableV2", {
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "entity_key", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT recommended for production environments
+    });
+
     const jobDescriptionsTable = new dynamodb.Table(this, "JobDescriptionsTable", {
       partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "job_id", type: dynamodb.AttributeType.STRING },
