@@ -30,7 +30,7 @@ Deployed via `cdk deploy` to AWS account `681583877402` / `us-east-1`. `Profiles
 
 8. CloudWatch Logs for both `profile-service` and `tailoring-service` over the test window: **Result: PASS.** Zero error events.
 
-9. **User's own independent confirmation** — the project owner signed in to the real dashboard with their own account, re-entered their profile via the paste-text intake flow, edited a field and re-saved, and generated a tailored CV — all works correctly.
+9. **User's own independent confirmation** — the project owner signed in to the real dashboard with their own account, confirmed their old profile was gone as expected (no data was migrated from the old table), re-entered their profile via the paste-text intake flow, edited a field and re-saved, and generated a tailored CV — all works correctly.
 
 **Status: `ProfilesTableV2` multi-item schema verified end-to-end against real AWS — both by direct raw-API verification and independently by the user through the actual dashboard UI.**
 
