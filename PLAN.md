@@ -25,11 +25,11 @@ built · ❓ open decision · ⏸ deferred.
 
 ## Architecture
 
-Five Lambdas behind one HTTP API, no VPC, three DynamoDB tables:
+Five Lambdas behind one HTTP API, no VPC, four DynamoDB tables:
 
 ```
 API Gateway (HttpApi)
- ├─ /profile              → profile-service     (ProfilesTable)
+ ├─ /profile              → profile-service     (ProfilesTableV2)
  ├─ /job-description       → job-service          (JobDescriptionsTable)
  ├─ /job-description/list  → job-service
  ├─ /tailor-preview        → tailoring-service    (reads both tables, no Bedrock)

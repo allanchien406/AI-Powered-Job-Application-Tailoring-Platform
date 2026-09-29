@@ -1,7 +1,7 @@
 # Profile multi-item schema — design
 
 Date: 2026-09-28
-Status: decided, not yet built
+Status: decided, implemented, AWS-verified
 
 ## Problem
 
@@ -89,9 +89,20 @@ failing a save outright, and `attach_embeddings` already tolerates a failed
 embedding with a warning rather than failing the whole save
 (`index.py:189-196`). A partial `BatchWriteItem` failure (one entry's `Put`
 fails while others succeed) is recoverable on the next save the same way.
+
+This is a slightly different risk shape from the old single-item `put_item`,
+though, which was atomic: two concurrent tabs saving at once always left the
+profile equal to exactly one full submission, never a mix of both. The new
+multi-item write can leave the profile as a genuine mix of two concurrent
+saves (e.g. tab A's edited project alongside tab B's edited experience),
+which the old atomic write could not produce. Still acceptable at this
+project's scale, but worth naming accurately rather than implying the risk
+is unchanged.
+
 `table.batch_writer()` is boto3's built-in helper: it auto-chunks into
-groups of 25 and retries unprocessed items with backoff internally, so no
-hand-rolled retry loop is needed.
+groups of 25 and retries unprocessed items internally (a tight retry loop on
+`__exit__` with no sleep/backoff of its own — only botocore's normal
+per-API-call retry applies), so no hand-rolled retry loop is needed.
 
 ### Skip writing entries that didn't change — the actual efficiency win
 

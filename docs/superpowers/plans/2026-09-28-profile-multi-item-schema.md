@@ -59,7 +59,7 @@ table is kept, unused, rather than deleted.
 
 **Files:** none
 
-- [ ] **Step 1: Create and push the branch**
+- [x] **Step 1: Create and push the branch**
 
 ```bash
 git checkout develop
@@ -82,7 +82,7 @@ git push -u origin profile-multi-item-schema
 - Produces: `profilesTableV2` (`dynamodb.Table`) — consumed by Task 4 (Lambda
   env var cutover + grants).
 
-- [ ] **Step 1: Add the new table resource**
+- [x] **Step 1: Add the new table resource**
 
 In `infra/lib/infra-stack.ts`, immediately after the existing `profilesTable`
 declaration (after line 40, before the `jobDescriptionsTable` declaration),
@@ -102,21 +102,21 @@ add:
     });
 ```
 
-- [ ] **Step 2: Verify it synthesizes**
+- [x] **Step 2: Verify it synthesizes**
 
 Run: `cd infra && npx cdk synth > /dev/null`
 Expected: exits 0, no errors. This only proves the CDK app compiles and
 synthesizes a template — it does not prove the table works; that's Task 7's
 job once this is actually deployed.
 
-- [ ] **Step 3: Run the existing CDK unit tests**
+- [x] **Step 3: Run the existing CDK unit tests**
 
 Run: `cd infra && npx jest`
 Expected: `infra/test/infra.test.ts` still passes (it doesn't yet assert
 anything about `ProfilesTableV2`, so this just confirms the new resource
 didn't break existing assertions).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add infra/lib/infra-stack.ts
@@ -141,7 +141,7 @@ git push
   normalized_profile) -> tuple[dict | None, list[str]]` — same return shape
   as the current `save_profile`, consumed by `handler`.
 
-- [ ] **Step 1: Add the `Key` import**
+- [x] **Step 1: Add the `Key` import**
 
 At the top of `infra/lambda/profile-service/index.py`, alongside the
 existing imports:
@@ -150,7 +150,7 @@ existing imports:
 from boto3.dynamodb.conditions import Key
 ```
 
-- [ ] **Step 2: Mint a stable `id` for project/experience entries**
+- [x] **Step 2: Mint a stable `id` for project/experience entries**
 
 Replace `normalize_entry_list` (`index.py:76-98`) with:
 
@@ -211,7 +211,7 @@ Add `import uuid` to the top of the file if it isn't already there (check —
 `save_profile`'s current `cv_id or str(uuid.uuid4())`-style pattern doesn't
 exist in this file yet, so this import is new here).
 
-- [ ] **Step 3: Switch `attach_embeddings` matching to `id`-first**
+- [x] **Step 3: Switch `attach_embeddings` matching to `id`-first**
 
 Replace `attach_embeddings` (`index.py:150-198`) with:
 
@@ -277,7 +277,7 @@ def attach_embeddings(new_entries, existing_entries, text_keys):
 (Only the matching logic in the first half changed; `entry_text_unchanged`
 itself is untouched.)
 
-- [ ] **Step 4: Replace the single-item read/write functions**
+- [x] **Step 4: Replace the single-item read/write functions**
 
 Replace `get_profile_by_user_id` and `save_profile`
 (`index.py:215-241`) with:
@@ -372,7 +372,7 @@ def save_profile(table, user_id, normalized_profile):
     return assemble_profile(final_items), project_warnings + experience_warnings
 ```
 
-- [ ] **Step 5: Update `handler` to use the new functions**
+- [x] **Step 5: Update `handler` to use the new functions**
 
 In `handler` (`index.py:244-273`):
 
@@ -407,12 +407,12 @@ In `handler` (`index.py:244-273`):
 the `PUT` branch's call to `save_profile` is unchanged since its signature
 didn't change.)
 
-- [ ] **Step 6: Verify it compiles**
+- [x] **Step 6: Verify it compiles**
 
 Run: `python3 -m py_compile infra/lambda/profile-service/index.py`
 Expected: exits 0, no output.
 
-- [ ] **Step 7: Local check of the pure logic (fake table, no AWS)**
+- [x] **Step 7: Local check of the pure logic (fake table, no AWS)**
 
 Write this to a scratch path and run it — a minimal in-memory fake
 satisfying the small subset of the boto3 `Table` API this code calls
@@ -502,7 +502,7 @@ print("All profile-service multi-item checks passed")
 Run: `python3 <scratch_path>.py`
 Expected: `All profile-service multi-item checks passed`, exit 0.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add infra/lambda/profile-service/index.py
@@ -526,14 +526,14 @@ git push
   API), consumed unchanged by the existing call sites at `index.py:556` and
   `index.py:592`.
 
-- [ ] **Step 1: Add the `Key` import**
+- [x] **Step 1: Add the `Key` import**
 
 Confirm `from boto3.dynamodb.conditions import Key` is present near the top
 of `infra/lambda/tailoring-service/index.py` (it's already used elsewhere in
 this file for `job_descriptions_table` lookups — if a grep shows it's not
 imported, add it).
 
-- [ ] **Step 2: Replace `get_profile_by_user_id`**
+- [x] **Step 2: Replace `get_profile_by_user_id`**
 
 Replace `index.py:150-152`:
 
@@ -581,12 +581,12 @@ def assemble_profile(items):
     }
 ```
 
-- [ ] **Step 3: Verify it compiles**
+- [x] **Step 3: Verify it compiles**
 
 Run: `python3 -m py_compile infra/lambda/tailoring-service/index.py`
 Expected: exits 0, no output.
 
-- [ ] **Step 4: Local check (fake table, no AWS)**
+- [x] **Step 4: Local check (fake table, no AWS)**
 
 Write this to a scratch path and run it:
 
@@ -627,7 +627,7 @@ print("All tailoring-service assemble_profile checks passed")
 Run: `python3 <scratch_path>.py`
 Expected: `All tailoring-service assemble_profile checks passed`, exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add infra/lambda/tailoring-service/index.py
@@ -646,7 +646,7 @@ git push
   `tailoringServiceHandler` blocks — around lines 141-146 and 178-186 per
   the earlier grep of this file)
 
-- [ ] **Step 1: Update `profileServiceHandler`'s env var and grant**
+- [x] **Step 1: Update `profileServiceHandler`'s env var and grant**
 
 Change:
 ```ts
@@ -665,7 +665,7 @@ to:
     profilesTableV2.grantReadWriteData(profileServiceHandler);
 ```
 
-- [ ] **Step 2: Update `tailoringServiceHandler`'s env var and grant**
+- [x] **Step 2: Update `tailoringServiceHandler`'s env var and grant**
 
 Change:
 ```ts
@@ -687,12 +687,12 @@ to:
 Leave `profilesTable`'s own declaration untouched — it still exists in the
 stack, just with no Lambda pointing at it anymore after this change deploys.
 
-- [ ] **Step 3: Verify it synthesizes**
+- [x] **Step 3: Verify it synthesizes**
 
 Run: `cd infra && npx cdk synth > /dev/null`
 Expected: exits 0.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Do **not** push/deploy this yet — Task 4's commit lands in git now, but per
 the Global Constraints it's deployed together with Tasks 2, 3, 5, and 6 in
@@ -709,7 +709,7 @@ git push
 **Files:**
 - Modify: `dashboard/src/api/backend.ts:30-41`
 
-- [ ] **Step 1: Add the optional field**
+- [x] **Step 1: Add the optional field**
 
 ```ts
 export interface ExperienceEntry {
@@ -732,12 +732,12 @@ This is a type-accuracy change only — `ProfileIntakePage.tsx`'s
 `updateExperience`/`updateProject` (`{...e, ...patch}`) already pass an
 unknown `id` field through edits untouched, so no runtime behavior changes.
 
-- [ ] **Step 2: Verify the typecheck/build passes**
+- [x] **Step 2: Verify the typecheck/build passes**
 
 Run: `cd dashboard && npm run build`
 Expected: exits 0, no type errors.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add dashboard/src/api/backend.ts
@@ -751,7 +751,7 @@ git push
 - Modify: `API.md` (the `profile-service` section, `API.md:12-42`)
 - Modify: `PLAN.md` (the `ProfilesTable` section, `PLAN.md:43-70`)
 
-- [ ] **Step 1: Update `API.md`**
+- [x] **Step 1: Update `API.md`**
 
 In the `profile-service` section, change the storage line
 (`API.md:14-15`):
@@ -785,7 +785,7 @@ And update the "Behavior worth knowing" line (`API.md:39-42`):
   to `name`/`title` for an entry that doesn't have an `id` yet.
 ```
 
-- [ ] **Step 2: Update `PLAN.md`**
+- [x] **Step 2: Update `PLAN.md`**
 
 Change the `ProfilesTable` heading and body (`PLAN.md:43-70`) to:
 
@@ -821,7 +821,7 @@ avoids re-*writing* it.
 
 (Keep `JobDescriptionsTable`/`CvsTable` sections below this unchanged.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add API.md PLAN.md
@@ -840,7 +840,7 @@ this is a single deploy, not a staged sequence.
 
 ### Task 7: Deploy
 
-- [ ] **Step 1: Deploy everything**
+- [x] **Step 1: Deploy everything**
 
 ```bash
 cd infra && npx cdk deploy
@@ -852,7 +852,7 @@ successful updates to `ProfileServiceHandler`/`TailoringServiceHandler`
 resolves the create-before-update dependency automatically since the
 Lambda environments reference `profilesTableV2.tableName`.
 
-- [ ] **Step 2: Confirm the new table exists**
+- [x] **Step 2: Confirm the new table exists**
 
 ```bash
 aws dynamodb describe-table --table-name <ProfilesTableV2 physical name from the deploy output>
@@ -868,7 +868,7 @@ Run this yourself first (per `CLAUDE.md`: verify it yourself, then hand back
 the same steps for independent confirmation — don't mark anything done
 before that confirmation comes back).
 
-- [ ] **Step 1: `GET`/`PUT` round-trip on a fresh profile**
+- [x] **Step 1: `GET`/`PUT` round-trip on a fresh profile**
 
 1. Sign in (the old profile is gone — `ProfilesTableV2` starts empty, by
    design), go to `/profile`.
@@ -878,7 +878,7 @@ before that confirmation comes back).
    and Save. Confirm it saves and reloads correctly.
 4. Edit one field on one project and Save again.
 
-- [ ] **Step 2: Confirm unchanged entries are skipped, not just cached**
+- [x] **Step 2: Confirm unchanged entries are skipped, not just cached**
 
 1. Raw DynamoDB read of a project's item before a save where only a
    *different* entry is edited:
@@ -891,25 +891,25 @@ before that confirmation comes back).
    ideally check CloudWatch to confirm no `PutItem`/`BatchWriteItem` touched
    that key — the app-level check is the embedding being unchanged).
 
-- [ ] **Step 3: Confirm deletion works**
+- [x] **Step 3: Confirm deletion works**
 
 1. Remove a project from the profile in the UI and Save.
 2. Confirm it's gone on reload.
 3. `aws dynamodb query --table-name <ProfilesTableV2> --key-condition-expression "user_id = :u" --expression-attribute-values '{":u": {"S": "<sub>"}}'` — confirm that project's item no longer appears.
 
-- [ ] **Step 4: Confirm `tailoring-service` still works end-to-end**
+- [x] **Step 4: Confirm `tailoring-service` still works end-to-end**
 
 Run `/tailor-generate` (or `/tailor-preview`) against the freshly re-entered
 profile and a saved job description. Confirm matched experiences/projects and the
 generated CV still reference the real company/period data, same as
 `TESTING.md`'s existing tailoring-service verification rounds.
 
-- [ ] **Step 5: Check CloudWatch**
+- [x] **Step 5: Check CloudWatch**
 
 Check `profile-service` and `tailoring-service` log groups for the test
 window. Expected: zero error events.
 
-- [ ] **Step 6: Hand back the manual test plan**
+- [x] **Step 6: Hand back the manual test plan**
 
 Give the user Steps 1-5 above (with their own account/sub/table name filled
 in) as a reproducible manual test plan, per `CLAUDE.md`. Wait for their
@@ -917,19 +917,19 @@ confirmation that it passed before proceeding to Task 9.
 
 ### Task 9: Close out
 
-- [ ] **Step 1: Update `PLAN.md`'s status marker**
+- [x] **Step 1: Update `PLAN.md`'s status marker**
 
 Only after Task 8's manual confirmation comes back: change
 `ProfilesTableV2`'s status line in `PLAN.md` from `🚧 implemented, pending
 deployment verification` to `✅ implemented, AWS-verified`.
 
-- [ ] **Step 2: Append a `TESTING.md` entry**
+- [x] **Step 2: Append a `TESTING.md` entry**
 
 Add a dated section to `TESTING.md` (matching its existing per-service
 format) documenting what was actually run in Task 8 and its results —
 same style as the existing `profile-service`/`tailoring-service` sections.
 
-- [ ] **Step 3: Commit and push**
+- [x] **Step 3: Commit and push**
 
 ```bash
 git add PLAN.md TESTING.md
@@ -937,7 +937,7 @@ git commit -m "profile multi-item schema: mark AWS-verified"
 git push
 ```
 
-- [ ] **Step 4: Open the PR**
+- [x] **Step 4: Open the PR**
 
 Per `CLAUDE.md`, merge `develop` back into `main` via a PR when ready — but
 first merge this feature branch into `develop` (also via PR, since this

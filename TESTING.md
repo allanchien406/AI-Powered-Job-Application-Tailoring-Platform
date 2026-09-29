@@ -3,14 +3,15 @@
 A procedural record of what was actually run against real AWS (account
 `681583877402`, `us-east-1`) and what came back — not just the pass/fail
 summary in `PLAN.md`, but the steps and evidence behind it. Ordered
-newest-first (`tailoring-service`, the most recently worked on, first).
+newest-first.
 
-**Environment for all of this:** staged deploy branch `test/deploy-profile-service`,
+**Environment for the sections below** (except where a section documents its
+own): staged deploy branch `test/deploy-profile-service`,
 API base URL `https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com`.
 
 ## ProfilesTableV2 multi-item schema end-to-end verification
 
-Verification of the DynamoDB migration from single-item-per-user (`ProfilesTable`) to multi-item (`ProfilesTableV2`), with one item per profile plus one item per project/experience/education entry. Tests confirm the schema, the write-once-read-many embedding cache, the delete-obsolete-items optimization, the downstream flow into `/tailor-generate`, and independent user confirmation through the dashboard.
+Verification of the DynamoDB migration from single-item-per-user (`ProfilesTable`) to multi-item (`ProfilesTableV2`), with one item per profile plus one item per project/experience entry. Tests confirm the schema, the write-once-read-many embedding cache, the delete-obsolete-items optimization, the downstream flow into `/tailor-generate`, and independent user confirmation through the dashboard.
 
 Deployed via `cdk deploy` to AWS account `681583877402` / `us-east-1`. `ProfilesTableV2` created (PK: `user_id`, SK: `entity_key`) with `PAY_PER_REQUEST` and status `ACTIVE`. Both `ProfileServiceHandler` and `TailoringServiceHandler` Lambdas updated with `PROFILES_TABLE_NAME` repointed to the new table. Test user: `sdd.verify.test@example.com` (throwaway Cognito test user, deleted after verification; all profile/job-description test data cleaned up from DynamoDB afterward).
 
