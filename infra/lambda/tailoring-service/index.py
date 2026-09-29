@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import boto3
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key
 
 
 dynamodb = boto3.resource("dynamodb")
@@ -148,8 +149,54 @@ def get_user_id(event):
 
 
 def get_profile_by_user_id(user_id):
-    """Read-only lookup — this service never writes to ProfilesTable."""
-    return profiles_table().get_item(Key={"user_id": user_id}).get("Item")
+    """Read-only lookup -- this service never writes to ProfilesTable."""
+    table = profiles_table()
+    items = []
+    kwargs = {"KeyConditionExpression": Key("user_id").eq(user_id)}
+    while True:
+        page = table.query(**kwargs)
+        items.extend(page.get("Items", []))
+        if "LastEvaluatedKey" not in page:
+            break
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    return assemble_profile(items)
+
+
+def assemble_profile(items):
+    """Mirrors profile-service's assemble_profile -- groups the flat
+    multi-item Query result back into the shape this service's matching
+    code expects (profile.get("projects"), .get("experience"), etc.).
+    Embeddings are NOT stripped here (unlike profile-service's public API)
+    since this service needs them for cosine similarity. Leftover storage
+    keys (entity_key/order) on each entry are harmless -- callers only
+    read specific fields via .get()."""
+    base = None
+    projects = []
+    experience = []
+    for item in items:
+        key = item.get("entity_key", "")
+        if key == "PROFILE":
+            base = item
+        elif key.startswith("PROJECT#"):
+            projects.append(item)
+        elif key.startswith("EXPERIENCE#"):
+            experience.append(item)
+
+    if base is None:
+        return None
+
+    projects.sort(key=lambda e: e.get("order", 0))
+    experience.sort(key=lambda e: e.get("order", 0))
+
+    return {
+        "user_id": base["user_id"],
+        "email": base.get("email", ""),
+        "full_name": base.get("full_name", ""),
+        "skills": base.get("skills", []),
+        "education": base.get("education", []),
+        "projects": projects,
+        "experience": experience,
+    }
 
 
 def get_job_description_by_id(user_id, job_id):

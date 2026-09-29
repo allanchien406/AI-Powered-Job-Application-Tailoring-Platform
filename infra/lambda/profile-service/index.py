@@ -1,9 +1,11 @@
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import boto3
+from boto3.dynamodb.conditions import Key
 
 
 dynamodb = boto3.resource("dynamodb")
@@ -73,7 +75,7 @@ def normalize_string_list(values):
     return normalized_values
 
 
-def normalize_entry_list(values, required_keys):
+def normalize_entry_list(values, required_keys, assign_id=False):
     if not isinstance(values, list):
         return []
 
@@ -93,6 +95,15 @@ def normalize_entry_list(values, required_keys):
         if not any(normalized_entry.values()):
             continue
 
+        if assign_id:
+            # Stable identity for the entry's own DynamoDB item
+            # (PROJECT#<id> / EXPERIENCE#<id>) -- minted once, then
+            # round-tripped by the frontend on every subsequent edit.
+            entry_id = value.get("id")
+            normalized_entry["id"] = (
+                entry_id.strip() if isinstance(entry_id, str) and entry_id.strip() else str(uuid.uuid4())
+            )
+
         normalized_values.append(normalized_entry)
 
     return normalized_values
@@ -106,8 +117,8 @@ def normalize_profile_payload(data):
         "full_name": full_name.strip() if isinstance(full_name, str) else "",
         "email": email.strip().lower() if isinstance(email, str) else "",
         "skills": normalize_string_list(data.get("skills")),
-        "projects": normalize_entry_list(data.get("projects"), ["name", "period", "description"]),
-        "experience": normalize_entry_list(data.get("experience"), ["title", "company", "period", "description"]),
+        "projects": normalize_entry_list(data.get("projects"), ["name", "period", "description"], assign_id=True),
+        "experience": normalize_entry_list(data.get("experience"), ["title", "company", "period", "description"], assign_id=True),
         "education": normalize_entry_list(data.get("education"), ["institution", "degree", "period", "description"]),
     }
 
@@ -152,25 +163,29 @@ def attach_embeddings(new_entries, existing_entries, text_keys):
     last save; only call Bedrock for entries that are new or edited.
 
     `text_keys` is the embed-relevant subset of an entry's fields, not all of
-    them — e.g. `period` (dates) is deliberately left out: it's not semantic
+    them -- e.g. `period` (dates) is deliberately left out: it's not semantic
     content worth embedding, and editing only the dates shouldn't trigger a
     re-embed. The full entry (including `period`) is still what gets stored.
 
-    Matched by identity field (the first of text_keys — "name" for projects,
-    "title" for experience) rather than array position, so reordering entries or
-    deleting an earlier one doesn't cascade into needless re-embeds for entries
-    whose content didn't actually change. If two entries share the same identity
-    value, the later one in the stored list wins the lookup — an acceptable edge
-    case at this scale, not worth a more elaborate identity scheme yet.
+    Matched by `id` first (stable across renames/reorders), falling back to
+    identity field (the first of text_keys -- "name" for projects, "title"
+    for experience) for an entry that doesn't have an id yet. If two
+    id-less entries share the same identity value, the later one in the
+    stored list wins the lookup -- an acceptable edge case at this scale.
 
     A Bedrock failure while embedding a new/changed entry does NOT fail the
-    whole save — the entry is stored with embedding=None and a warning is
+    whole save -- the entry is stored with embedding=None and a warning is
     returned instead. This is safe to leave for later: tailoring-service
     already falls back to embedding inline if an entry has no cached vector,
     and the "existing_entry.get('embedding')" check below means the *next*
     successful save automatically retries any entry stuck at None.
     """
     identity_key = text_keys[0]
+    existing_by_id = {
+        existing_entry["id"]: existing_entry
+        for existing_entry in existing_entries
+        if isinstance(existing_entry, dict) and existing_entry.get("id")
+    }
     existing_by_identity = {
         existing_entry.get(identity_key): existing_entry
         for existing_entry in existing_entries
@@ -180,7 +195,10 @@ def attach_embeddings(new_entries, existing_entries, text_keys):
     result = []
     warnings = []
     for entry in new_entries:
-        existing_entry = existing_by_identity.get(entry.get(identity_key))
+        existing_entry = existing_by_id.get(entry.get("id"))
+        if existing_entry is None:
+            existing_entry = existing_by_identity.get(entry.get(identity_key))
+
         if entry_text_unchanged(existing_entry, entry, text_keys) and existing_entry.get("embedding"):
             entry = {**entry, "embedding": existing_entry["embedding"]}
         else:
@@ -212,33 +230,104 @@ def strip_embeddings(profile):
     }
 
 
-def get_profile_by_user_id(table, user_id):
-    return table.get_item(Key={"user_id": user_id}).get("Item")
+def query_profile_items(table, user_id):
+    items = []
+    kwargs = {"KeyConditionExpression": Key("user_id").eq(user_id)}
+    while True:
+        page = table.query(**kwargs)
+        items.extend(page.get("Items", []))
+        if "LastEvaluatedKey" not in page:
+            return items
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
+def assemble_profile(items):
+    """Group the flat multi-item Query result back into the profile shape
+    the rest of this service (and its API response) expects. Returns None
+    if there's no PROFILE base item -- i.e. the user has no saved profile."""
+    base = None
+    projects = []
+    experience = []
+    for item in items:
+        key = item.get("entity_key", "")
+        if key == "PROFILE":
+            base = item
+        elif key.startswith("PROJECT#"):
+            projects.append(item)
+        elif key.startswith("EXPERIENCE#"):
+            experience.append(item)
+
+    if base is None:
+        return None
+
+    def strip_storage_keys(entry):
+        return {k: v for k, v in entry.items() if k not in ("user_id", "entity_key", "order")}
+
+    projects.sort(key=lambda e: e.get("order", 0))
+    experience.sort(key=lambda e: e.get("order", 0))
+
+    return {
+        "user_id": base["user_id"],
+        "email": base.get("email", ""),
+        "full_name": base.get("full_name", ""),
+        "skills": base.get("skills", []),
+        "education": base.get("education", []),
+        "projects": [strip_storage_keys(p) for p in projects],
+        "experience": [strip_storage_keys(e) for e in experience],
+        "created_at": base.get("created_at"),
+        "updated_at": base.get("updated_at"),
+    }
 
 
 def save_profile(table, user_id, normalized_profile):
-    existing = get_profile_by_user_id(table, user_id) or {}
+    existing_items = query_profile_items(table, user_id)
+    existing_profile = assemble_profile(existing_items) or {}
+    existing_by_key = {item["entity_key"]: item for item in existing_items}
 
     projects, project_warnings = attach_embeddings(
-        normalized_profile["projects"], existing.get("projects", []), ["name", "description"]
+        normalized_profile["projects"], existing_profile.get("projects", []), ["name", "description"]
     )
     experience, experience_warnings = attach_embeddings(
-        normalized_profile["experience"], existing.get("experience", []), ["title", "company", "description"]
+        normalized_profile["experience"], existing_profile.get("experience", []), ["title", "company", "description"]
     )
 
-    item = {
+    now = now_iso()
+    base_item = {
         "user_id": user_id,
+        "entity_key": "PROFILE",
         "email": normalized_profile["email"],
         "full_name": normalized_profile["full_name"],
         "skills": normalized_profile["skills"],
-        "projects": projects,
-        "experience": experience,
         "education": normalized_profile["education"],
-        "created_at": existing.get("created_at", now_iso()),
-        "updated_at": now_iso(),
+        "created_at": existing_by_key.get("PROFILE", {}).get("created_at", now),
+        "updated_at": now,
     }
-    table.put_item(Item=item)
-    return item, project_warnings + experience_warnings
+
+    final_items = [base_item]
+    for prefix, entries in (("PROJECT#", projects), ("EXPERIENCE#", experience)):
+        for order, entry in enumerate(entries):
+            final_items.append({**entry, "user_id": user_id, "entity_key": f"{prefix}{entry['id']}", "order": order})
+
+    final_keys = {item["entity_key"] for item in final_items}
+    # Anything in existing_by_key not in final_keys gets deleted below -- this
+    # function owns the full set of recognized entity_key types (PROFILE,
+    # PROJECT#, EXPERIENCE#), so a future entity type added elsewhere without
+    # updating this function would have its items silently deleted here.
+    keys_to_delete = [key for key in existing_by_key if key not in final_keys]
+
+    with table.batch_writer(overwrite_by_pkeys=["user_id", "entity_key"]) as batch:
+        for item in final_items:
+            # Skip rewriting an entry that hasn't changed at all (content or
+            # order) -- the whole point of splitting entries into their own
+            # items is that an untouched project shouldn't cost a write just
+            # because a sibling entry changed.
+            if existing_by_key.get(item["entity_key"]) == item:
+                continue
+            batch.put_item(Item=item)
+        for key in keys_to_delete:
+            batch.delete_item(Key={"user_id": user_id, "entity_key": key})
+
+    return assemble_profile(final_items), project_warnings + experience_warnings
 
 
 def handler(event, context):
@@ -248,7 +337,7 @@ def handler(event, context):
 
         if event.get("rawPath") == "/profile" and http_method == "GET":
             user_id = get_user_id(event)
-            profile = get_profile_by_user_id(table, user_id)
+            profile = assemble_profile(query_profile_items(table, user_id))
 
             if not profile:
                 return response(404, {"error": "Profile not found"})

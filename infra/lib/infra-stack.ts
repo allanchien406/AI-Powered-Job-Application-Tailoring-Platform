@@ -39,6 +39,18 @@ export class InfraStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT recommended for production environments
     });
 
+    // Multi-item replacement for `profilesTable` -- PK user_id, SK
+    // entity_key ("PROFILE" | "PROJECT#<id>" | "EXPERIENCE#<id>"). See
+    // docs/superpowers/specs/2026-09-28-profile-multi-item-schema-design.md.
+    // `profilesTable` above is kept, unused once cutover lands, as a
+    // rollback safety net -- do not delete it here.
+    const profilesTableV2 = new dynamodb.Table(this, "ProfilesTableV2", {
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "entity_key", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT recommended for production environments
+    });
+
     const jobDescriptionsTable = new dynamodb.Table(this, "JobDescriptionsTable", {
       partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "job_id", type: dynamodb.AttributeType.STRING },
@@ -138,11 +150,11 @@ export class InfraStack extends cdk.Stack {
       code: Code.fromAsset("lambda/profile-service"),
       timeout: cdk.Duration.seconds(15), // occasional single embedding call on save
       environment: {
-        PROFILES_TABLE_NAME: profilesTable.tableName,
+        PROFILES_TABLE_NAME: profilesTableV2.tableName,
         ...embeddingEnv,
       },
     });
-    profilesTable.grantReadWriteData(profileServiceHandler);
+    profilesTableV2.grantReadWriteData(profileServiceHandler);
     profileServiceHandler.addToRolePolicy(bedrockEmbeddingPolicy);
 
     // --- Job description service Lambda ---
@@ -175,13 +187,13 @@ export class InfraStack extends cdk.Stack {
         code: Code.fromAsset("lambda/tailoring-service"),
         timeout: cdk.Duration.seconds(30), // generation call + at most one ad-hoc JD embedding
         environment: {
-          PROFILES_TABLE_NAME: profilesTable.tableName,
+          PROFILES_TABLE_NAME: profilesTableV2.tableName,
           JOB_DESCRIPTIONS_TABLE_NAME: jobDescriptionsTable.tableName,
           ...generationEnv,
         },
       },
     );
-    profilesTable.grantReadData(tailoringServiceHandler);
+    profilesTableV2.grantReadData(tailoringServiceHandler);
     jobDescriptionsTable.grantReadData(tailoringServiceHandler);
     tailoringServiceHandler.addToRolePolicy(bedrockEmbeddingPolicy);
     tailoringServiceHandler.addToRolePolicy(bedrockGenerationPolicy);

@@ -3,10 +3,39 @@
 A procedural record of what was actually run against real AWS (account
 `681583877402`, `us-east-1`) and what came back — not just the pass/fail
 summary in `PLAN.md`, but the steps and evidence behind it. Ordered
-newest-first (`tailoring-service`, the most recently worked on, first).
+newest-first.
 
-**Environment for all of this:** staged deploy branch `test/deploy-profile-service`,
+**Environment for the sections below** (except where a section documents its
+own): staged deploy branch `test/deploy-profile-service`,
 API base URL `https://qmpqjnqmn8.execute-api.us-east-1.amazonaws.com`.
+
+## ProfilesTableV2 multi-item schema end-to-end verification
+
+Verification of the DynamoDB migration from single-item-per-user (`ProfilesTable`) to multi-item (`ProfilesTableV2`), with one item per profile plus one item per project/experience entry. Tests confirm the schema, the write-once-read-many embedding cache, the delete-obsolete-items optimization, the downstream flow into `/tailor-generate`, and independent user confirmation through the dashboard.
+
+Deployed via `cdk deploy` to AWS account `681583877402` / `us-east-1`. `ProfilesTableV2` created (PK: `user_id`, SK: `entity_key`) with `PAY_PER_REQUEST` and status `ACTIVE`. Both `ProfileServiceHandler` and `TailoringServiceHandler` Lambdas updated with `PROFILES_TABLE_NAME` repointed to the new table. Test user: `sdd.verify.test@example.com` (throwaway Cognito test user, deleted after verification; all profile/job-description test data cleaned up from DynamoDB afterward).
+
+1. `GET /profile` for a brand-new user: **Result: PASS.** `404 {"error": "Profile not found"}`.
+
+2. `PUT /profile` with a profile containing 2 projects, 1 experience entry, 1 education entry: **Result: PASS.** `200`, response included server-minted `id` fields on each project/experience entry, correct field values.
+
+3. Raw DynamoDB query on `ProfilesTableV2` for that user: **Result: PASS.** Exactly 4 items returned: 1× `PROFILE`, 2× `PROJECT#<id>`, 1× `EXPERIENCE#<id>`, confirming the multi-item write.
+
+4. `GET /profile` round-trip: **Result: PASS.** Response semantically identical to the `PUT` response (only differences: key ordering and the absent `message` field, both expected).
+
+5. **Core efficiency win — re-saved the same profile with only `full_name` changed** (all projects/experience untouched): **Result: PASS.** Raw `GetItem` on one project's DynamoDB item before and after the save was **byte-for-byte identical, including its embedding**, confirming the skip-unchanged-write optimization actually skips the write in production, not just in unit checks.
+
+6. Removed one project from the payload and re-saved: **Result: PASS.** Raw DynamoDB query afterward showed that project's item was gone entirely (3 items left instead of 4), confirming deletion works.
+
+7. `PUT /job-description` + `POST /tailor-preview` + `POST /tailor-generate` against this profile: **Result: PASS.** `tailor-preview`'s `prompt_context.candidate.full_name` correctly reflected the edited name (confirming `tailoring-service` reads the new schema correctly); `tailor-generate`'s `generated_cv.experience` used the real employer ("Acme") for the experience entry and "Not specified" for the project entry (which has no employer) — the target company ("Vertex Analytics") did not appear as a fabricated employer anywhere, consistent with this repo's existing anti-hallucination behavior.
+
+8. CloudWatch Logs for both `profile-service` and `tailoring-service` over the test window: **Result: PASS.** Zero error events.
+
+9. **User's own independent confirmation** — the project owner signed in to the real dashboard with their own account, confirmed their old profile was gone as expected (no data was migrated from the old table), re-entered their profile via the paste-text intake flow, edited a field and re-saved, and generated a tailored CV — all works correctly.
+
+**Status: `ProfilesTableV2` multi-item schema verified end-to-end against real AWS — both by direct raw-API verification and independently by the user through the actual dashboard UI.**
+
+---
 
 ## CV persistence verification
 

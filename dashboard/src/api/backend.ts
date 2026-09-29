@@ -28,6 +28,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export interface ExperienceEntry {
+  id?: string;
   title: string;
   company: string;
   period: string;
@@ -35,6 +36,7 @@ export interface ExperienceEntry {
 }
 
 export interface ProjectEntry {
+  id?: string;
   name: string;
   period: string;
   description: string;
