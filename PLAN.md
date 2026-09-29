@@ -48,7 +48,7 @@ embedding-driven item size — see `ProfilesTableV2` below and
 the full reasoning. Not deleted yet; deletion is a deliberate later
 follow-up once confidence has built up.
 
-### `ProfilesTableV2` — 🚧 implemented, pending deployment verification
+### `ProfilesTableV2` — ✅ implemented, AWS-verified
 
 | | |
 |---|---|
