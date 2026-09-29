@@ -150,7 +150,15 @@ def get_user_id(event):
 
 def get_profile_by_user_id(user_id):
     """Read-only lookup -- this service never writes to ProfilesTable."""
-    items = profiles_table().query(KeyConditionExpression=Key("user_id").eq(user_id)).get("Items", [])
+    table = profiles_table()
+    items = []
+    kwargs = {"KeyConditionExpression": Key("user_id").eq(user_id)}
+    while True:
+        page = table.query(**kwargs)
+        items.extend(page.get("Items", []))
+        if "LastEvaluatedKey" not in page:
+            break
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
     return assemble_profile(items)
 
 

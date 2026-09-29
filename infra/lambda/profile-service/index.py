@@ -231,7 +231,14 @@ def strip_embeddings(profile):
 
 
 def query_profile_items(table, user_id):
-    return table.query(KeyConditionExpression=Key("user_id").eq(user_id)).get("Items", [])
+    items = []
+    kwargs = {"KeyConditionExpression": Key("user_id").eq(user_id)}
+    while True:
+        page = table.query(**kwargs)
+        items.extend(page.get("Items", []))
+        if "LastEvaluatedKey" not in page:
+            return items
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
 
 def assemble_profile(items):
@@ -302,9 +309,13 @@ def save_profile(table, user_id, normalized_profile):
             final_items.append({**entry, "user_id": user_id, "entity_key": f"{prefix}{entry['id']}", "order": order})
 
     final_keys = {item["entity_key"] for item in final_items}
+    # Anything in existing_by_key not in final_keys gets deleted below -- this
+    # function owns the full set of recognized entity_key types (PROFILE,
+    # PROJECT#, EXPERIENCE#), so a future entity type added elsewhere without
+    # updating this function would have its items silently deleted here.
     keys_to_delete = [key for key in existing_by_key if key not in final_keys]
 
-    with table.batch_writer() as batch:
+    with table.batch_writer(overwrite_by_pkeys=["user_id", "entity_key"]) as batch:
         for item in final_items:
             # Skip rewriting an entry that hasn't changed at all (content or
             # order) -- the whole point of splitting entries into their own
