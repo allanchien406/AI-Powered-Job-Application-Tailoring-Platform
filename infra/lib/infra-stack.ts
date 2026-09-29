@@ -150,11 +150,11 @@ export class InfraStack extends cdk.Stack {
       code: Code.fromAsset("lambda/profile-service"),
       timeout: cdk.Duration.seconds(15), // occasional single embedding call on save
       environment: {
-        PROFILES_TABLE_NAME: profilesTable.tableName,
+        PROFILES_TABLE_NAME: profilesTableV2.tableName,
         ...embeddingEnv,
       },
     });
-    profilesTable.grantReadWriteData(profileServiceHandler);
+    profilesTableV2.grantReadWriteData(profileServiceHandler);
     profileServiceHandler.addToRolePolicy(bedrockEmbeddingPolicy);
 
     // --- Job description service Lambda ---
@@ -187,13 +187,13 @@ export class InfraStack extends cdk.Stack {
         code: Code.fromAsset("lambda/tailoring-service"),
         timeout: cdk.Duration.seconds(30), // generation call + at most one ad-hoc JD embedding
         environment: {
-          PROFILES_TABLE_NAME: profilesTable.tableName,
+          PROFILES_TABLE_NAME: profilesTableV2.tableName,
           JOB_DESCRIPTIONS_TABLE_NAME: jobDescriptionsTable.tableName,
           ...generationEnv,
         },
       },
     );
-    profilesTable.grantReadData(tailoringServiceHandler);
+    profilesTableV2.grantReadData(tailoringServiceHandler);
     jobDescriptionsTable.grantReadData(tailoringServiceHandler);
     tailoringServiceHandler.addToRolePolicy(bedrockEmbeddingPolicy);
     tailoringServiceHandler.addToRolePolicy(bedrockGenerationPolicy);
