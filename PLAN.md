@@ -752,9 +752,24 @@ one Claude call. Chosen shape:
 
 ## Voice interview agent — 🚧 decided, not yet built
 
-Full spec (product decisions, architecture, phased interview flow, constraints,
-deferred items, verification approach) tracked in **`VOICE_INTERVIEW.md`**. Status
-markers update here; design detail lives in that file.
+A conversational voice interview that gathers the prose a CV is built from,
+feeding the existing `/profile/parse` → review → `PUT /profile` flow. Uses
+Amazon Nova 2 Sonic (speech-to-speech, one bidirectional stream for
+listen → reason → speak) in a new TypeScript `interview-service` Lambda,
+transported over **AppSync Events** with Cognito auth. The transcript is
+chunked **per interview phase** into `/profile/parse` and merged client-side,
+because a normal interview transcript exceeds that endpoint's 20,000-char
+cap. Streams renew at ~7 minutes with history replay, to get past Nova's hard
+8-minute per-connection limit.
+
+Design: **`docs/superpowers/specs/2026-10-01-voice-interview-design.md`**
+(full decisions, protocol, event contract, risks, and what changed from the
+earlier `VOICE_INTERVIEW.md` design). Build plan:
+**`docs/superpowers/plans/2026-10-01-voice-interview.md`**. Summary and
+status pointer: **`VOICE_INTERVIEW.md`**. Status markers update here.
+
+Not yet built. No new HTTP endpoint, no new DynamoDB table, and no change to
+the profile schema are required by it.
 
 ## Future improvements — 📝 noted, not started
 
@@ -763,15 +778,14 @@ User-proposed, captured here for later. Not designed or scoped yet.
 1. **Profile updates should merge, not overwrite.** `PUT /profile` today is a
    full replace — `normalize_profile_payload` takes exactly what's in the
    request body and that becomes the whole item (see `save_profile` in
-   `profile-service`). `ProfileIntakePage` compounds this on the frontend
-   side too: it always starts from a blank form (`stage: 'paste'`), so
-   there's no way to see what's already saved before adding to it — a user
-   has to re-paste their entire background to add one new job. Fix likely
-   needs both ends: the frontend should load the existing saved profile into
-   the review form (pre-filled, editable) instead of starting blank, and/or
-   `profile-service` should support adding a single entry without requiring
-   the full profile in the request. Worth deciding whether "merge" means
-   append-only (never lose data unless explicitly removed) or still
+   `profile-service`). The frontend side of this has since been fixed:
+   `ProfileIntakePage` now hydrates the form from the saved profile on mount
+   (`:43-64`), so there *is* a way to see what's already saved before adding
+   to it — but a user still has to re-submit their entire background to add
+   one new job, because the save underneath is a replace. Fix needs the
+   backend: `profile-service` should support adding a single entry without
+   requiring the full profile in the request. Worth deciding whether "merge"
+   means append-only (never lose data unless explicitly removed) or still
    full-replace-but-easier-to-edit (pre-filled form, same overwrite
    semantics underneath) — those are different amounts of backend work.
 2. **Saved job list needs delete.** Edit is now built: `PUT /job-description`
