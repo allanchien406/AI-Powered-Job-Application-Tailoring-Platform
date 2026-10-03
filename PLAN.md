@@ -1,0 +1,846 @@
+# Current plan: DynamoDB migration + semantic tailoring + Bedrock CV generation
+
+This tracks the architecture direction currently being implemented, separate from
+`README.md`'s product overview. Status markers: ✅ done · 🚧 decided, not yet
+built · ❓ open decision · ⏸ deferred.
+
+## Why this direction
+
+- **No RAG, no S3.** A user's profile is small, structured, and fetched whole in
+  one query — there's no corpus to retrieve from. A retrieval pipeline (chunking,
+  vector DB, retriever) would solve a problem this app doesn't have.
+- **Matching moves from exact-keyword to embedding-based semantic similarity**, so
+  a JD saying "CI/CD pipelines" matches a profile bullet saying "automated
+  deployment workflow." The old `tailoring-service` only caught literal substring
+  overlap against a hardcoded skill list.
+- **Embeddings are computed on write, not on every read.** Each project/experience
+  entry's embedding is computed once when saved and cached alongside it — avoids
+  ~9 redundant Bedrock calls per tailoring request.
+- **RDS was the wrong store for this data's shape.** `profiles` and
+  `job_descriptions` are both single-item-per-key JSON blobs with zero relational
+  joins anywhere in the codebase — a DynamoDB shape, not a relational one.
+- **`cv-service` is CRUD-only** — it persists the dashboard's existing `CVData`
+  shape in DynamoDB and makes no Bedrock calls. No Lambda needs RDS anymore, so
+  the VPC, security groups, and Secrets Manager interface endpoint come out.
+
+## Architecture
+
+Five Lambdas behind one HTTP API, no VPC, four DynamoDB tables:
+
+```
+API Gateway (HttpApi)
+ ├─ /profile              → profile-service     (ProfilesTableV2)
+ ├─ /job-description       → job-service          (JobDescriptionsTable)
+ ├─ /job-description/list  → job-service
+ ├─ /tailor-preview        → tailoring-service    (reads both tables, no Bedrock)
+ ├─ /tailor-generate       → tailoring-service    (reads both tables + Bedrock)
+ └─ /cv, /cv/list          → cv-service            (CvsTable)
+```
+
+Every route above sits behind a `HttpJwtAuthorizer` — there is no
+unauthenticated route. See "Authentication (Cognito)" below.
+
+### `ProfilesTable` — ⏸ superseded by `ProfilesTableV2`, kept as rollback safety net
+
+Single item per user (`PK=user_id`, no sort key). Replaced due to
+embedding-driven item size — see `ProfilesTableV2` below and
+`docs/superpowers/specs/2026-09-28-profile-multi-item-schema-design.md` for
+the full reasoning. Not deleted yet; deletion is a deliberate later
+follow-up once confidence has built up.
+
+### `ProfilesTableV2` — ✅ implemented, AWS-verified
+
+| | |
+|---|---|
+| Partition key | `user_id` (S, the Cognito `sub`) |
+| Sort key | `entity_key` (S — `"PROFILE"` \| `"PROJECT#<id>"` \| `"EXPERIENCE#<id>"`) |
+
+```json
+{"user_id": "<cognito-sub-uuid>", "entity_key": "PROFILE", "email": "allan@example.com", "full_name": "Allan Chien", "skills": ["AWS", "Python", "Docker"], "education": [], "created_at": "2026-01-04T10:22:31Z", "updated_at": "2026-09-28T03:10:02Z"}
+{"user_id": "<cognito-sub-uuid>", "entity_key": "PROJECT#3f1c9e2a-...", "id": "3f1c9e2a-...", "name": "2048 CI/CD Project", "period": "2020", "description": "...", "embedding": [0.02, "..."], "order": 0}
+{"user_id": "<cognito-sub-uuid>", "entity_key": "EXPERIENCE#8b0d4e3a-...", "id": "8b0d4e3a-...", "title": "Research Engineer", "company": "Bittide Labs", "period": "2021-2024", "description": "...", "embedding": [0.09, "..."], "order": 0}
+```
+
+One `PROFILE` item plus one `PROJECT#<id>`/`EXPERIENCE#<id>` item per entry,
+each independently bounded (~12KB, dominated by its embedding) instead of
+one item whose size scales with the whole profile. A save only rewrites
+entries that actually changed — `attach_embeddings`' existing cache already
+avoided re-*computing* an unchanged entry's embedding, this additionally
+avoids re-*writing* it.
+
+### `JobDescriptionsTable` — ✅ implemented
+
+| | |
+|---|---|
+| Partition key | `user_id` (S, the Cognito `sub`) |
+| Sort key | `job_id` (S, UUID generated at save time — was a SERIAL int under RDS) |
+
+```json
+{
+  "user_id": "<cognito-sub-uuid>",
+  "job_id": "3f1c9e2a-8b0d-4e3a-9f21-6c1a2b3d4e5f",
+  "company_name": "Catalyst Cloud",
+  "job_title": "Junior DevOps Engineer",
+  "raw_description": "...",
+  "embedding": [0.03, "..."],
+  "created_at": "2026-09-05T03:10:02Z"
+}
+```
+
+`user_id` as the partition key makes the old "JDs aren't scoped to a user" bug
+structurally impossible to reintroduce — there's no code path that can fetch an
+item without specifying whose partition to read from, and that partition is
+always the verified JWT `sub`, never a client-supplied value. (This key was
+originally `email`; it was renamed to `user_id` as part of the Cognito
+authentication work — see "Authentication (Cognito)" below.)
+
+### `CvsTable` — 🚧 implemented, pending deployment verification
+
+| | |
+|---|---|
+| Partition key | `user_id` (S, the Cognito `sub`) |
+| Sort key | `cv_id` (S, client-minted UUID) |
+
+The CV service exposes `PUT /cv`, `GET /cv?cv_id=`, `GET /cv/list`, and
+idempotent `DELETE /cv?cv_id=`. It performs CRUD and normalization only; it
+does not call Bedrock. The dashboard keeps a local write-through buffer,
+hydrates by unioning server and local CVs, and autosaves dirty edits with a
+debounce, max-wait, retry, and visibility flush. Generation, template changes,
+and deletion are discrete actions and flush immediately. Multiple versions may
+share a `job_id`; the dashboard filters them client-side because no GSI is
+planned. `updated_at` is shown as the last-edited date while list ordering
+remains `generated_at` descending.
+
+## Authentication (Cognito) — ✅ implemented and verified
+
+The API Gateway previously had no authorization on any route, and every
+Lambda trusted a plain `email` field from the request with no ownership
+check — anyone who knew an email could read/write that person's data. This
+is now fixed: every route requires a valid Cognito JWT, and identity is
+derived solely from the token's verified `sub` claim. Full design:
+[`docs/superpowers/specs/2026-09-21-cognito-authentication-design.md`](docs/superpowers/specs/2026-09-21-cognito-authentication-design.md).
+
+Summary of the decisions: Cognito Hosted UI (not a custom sign-in form) for
+less frontend auth code; every Lambda derives identity from the verified
+JWT's `sub` claim (via a `HttpJwtAuthorizer` on every route, access token as
+bearer), never from a client-supplied field; `ProfilesTable` /
+`JobDescriptionsTable` partition key moves from `email` to `user_id` (the
+Cognito `sub`) with `email` demoted to a normal profile attribute — `sub` is
+stable across sign-in methods (including future social sign-in, deferred for
+now) where `email`-as-username is not. Implementation proceeds in reviewable
+phases (CDK/Cognito, then frontend, then backend) per the plan, not all at
+once.
+
+**All three phases — ✅ implemented and verified**, including Phase 3
+(backend `sub`-based identity + DynamoDB key migration: `ProfilesTable`/
+`JobDescriptionsTable` replaced with `user_id` as the partition key, all
+three Lambdas — `profile-service`, `job-service`, `tailoring-service` —
+derive identity solely from the JWT's `sub` claim, and the frontend no
+longer sends `email`/an identity field on any API call except `PUT /profile`,
+where it's just a normal display attribute). Implemented via
+`superpowers:subagent-driven-development`; full task-by-task record in
+`.superpowers/sdd/2026-09-21-cognito-authentication/` (git-ignored,
+session-local — this note is the durable summary). Verified end to end
+(curl with two real Cognito users confirming save/read/list/tailor all work
+and neither user can see the other's data, plus the full browser flow) after
+deploying the schema-migrating changes — the migration wiped the prior
+`email`-keyed table contents as anticipated, so existing profile/job data
+was re-entered once through the app post-deploy.
+
+**Each of the three Lambdas also picked up a `MissingIdentityError`
+exception**, distinct from `KeyError`, so a missing/malformed JWT-authorizer
+context produces an accurate error instead of being misreported as a
+missing environment variable (found via code review during Phase 3, not
+part of the original design).
+
+**Gotcha hit during Phase 2 verification, worth remembering:** getting
+`fetchUserAttributes()` to work after Hosted UI sign-in needed the
+`aws.cognito.signin.user.admin` OAuth scope added in **two separate
+places**, not one — `infra/lib/infra-stack.ts`'s `AllowedOAuthScopes`
+(what the User Pool Client *permits*) AND `dashboard/src/amplify-config.ts`'s
+`oauth.scopes` (what the client actually *requests* during sign-in). Adding
+it to only the CDK side (permitting it) silently does nothing — the token
+still won't carry the scope unless the frontend also asks for it. A curl-based
+"verification" using `admin-initiate-auth` gave false confidence here, since
+that non-OAuth flow always carries the admin scope regardless of this
+config — it never actually exercises the OAuth path real users go through.
+Lesson: verify a fix via the actual code path it's fixing, not an adjacent
+one that happens to already work. (Separately: a Safari content-blocker
+extension surfaced a misleading `BadRequest` error mid-debugging that
+looked related but wasn't — Safari's Private Browsing does *not* disable
+Safari App Store content-blocker extensions the way Chrome disables
+extensions in Incognito, so "I tried private mode" didn't rule out an
+extension there the way it would in Chrome.)
+
+## Embedding cache — ✅ implemented
+
+- Computed once in `profile-service`/`job-service` on save, stored inline on each
+  entry (`embedding: [floats]`, stored as DynamoDB `Decimal`, converted to `float`
+  only at the JSON-response boundary via a custom encoder).
+- `profile-service` only re-embeds a project/experience entry if its text actually
+  changed since the last save, matched by **identity field** (`name`/`title`), not
+  array position — reordering or deleting an earlier entry doesn't cascade into
+  needless re-embeds for unrelated entries.
+- Never echoed back through the public API (`strip_embeddings` in
+  `profile-service`, `strip_embedding` in `job-service`) — internal plumbing for
+  `tailoring-service`, not something the frontend needs.
+- Steady-state Bedrock calls per `/tailor-generate` request: 0–1 (only an
+  ad-hoc/uncached JD needs a fresh embedding) + 1 generation call — down from ~9
+  in the naive "embed everything on every request" design.
+
+## Matching — ✅ implemented
+
+- `/tailor-preview` keeps the original keyword-only scoring (`score_projects`,
+  `score_experience`) — free, fast, zero Bedrock calls, unchanged behavior.
+  Still the only thing bound by the `KNOWN_SKILLS` whitelist.
+- `/tailor-generate` uses `score_*_with_semantics`, which is **pure embedding
+  similarity — no keyword component at all.** This was a deliberate
+  simplification after the fact: the original design blended keyword score
+  with cosine similarity, but a literal keyword match (e.g. "AWS" appearing in
+  both texts) already scores highly on embedding similarity too, so the
+  keyword bonus was mostly reinforcing what semantic scoring already caught,
+  not adding independent signal. Every entry is ranked by cosine similarity
+  between its cached embedding and the JD's embedding; entries below
+  `MIN_SEMANTIC_SCORE` (`0.10`) are then dropped as noise, and
+  `build_prompt_context` caps the prompt at the top 3 of what's left. The
+  0.10 number comes from a real test (see "Threshold calibration" below), not
+  a guess — it started life as "no threshold at all" until there was data to
+  set one from.
+- ✅ **Fixed: matched projects were silently dropped from `generated_cv`.**
+  The generation system prompt's output schema only ever declared an
+  `experience` array — no `projects` field — and nothing told the model to
+  fold `matched_projects` into it, so the model reasonably treated
+  `experience` as corresponding only to `matched_experiences` and dropped
+  every project. Fixed by adding an explicit instruction: merge every entry
+  from both `matched_projects` and `matched_experiences` into the single
+  `experience` array (projects still get `"company": "Not specified"`, per
+  the existing rule). Verified against the real deployed endpoint: before
+  the fix, 3 real matched projects (cosine scores 0.208/0.146/0.13) never
+  appeared in `generated_cv.experience`; after, all 4 entries (1 experience
+  + 3 projects) appear.
+- **`skills` is not an independent matching signal.** There's no
+  `match_skills`/skill embedding at all, in either route. Reasoning: a skill
+  worth matching on should already appear with context inside a project or
+  experience description — a bare skill tag with no supporting sentence is
+  weaker evidence than a description showing how it was used, and matching on
+  it separately would just be re-solving what `score_*` already covers via the
+  full job-description text. `skills` stays in profile storage as plain
+  strings, unembedded, for CV-display purposes only (the conventional
+  "Skills" tag section), not for scoring.
+
+### Threshold calibration
+
+`MIN_SEMANTIC_SCORE = 0.10`. Data behind it (see `TESTING.md` for the full
+runs):
+
+- **Test 1** — a profile with 4 experience + 4 project entries, only one of
+  each genuinely IT-related, the rest hobbies (choir, astronomy, gardening,
+  sourdough…), against a software-engineer JD. Cosine scores: hobbies landed
+  **0.03–0.09**; the one relevant experience (had a literal "python" hit too)
+  scored **0.38**; the one relevant project (pure paraphrase, *zero* keyword
+  overlap — "backend server / relational database" vs the JD's "databases /
+  full-stack web applications") scored **0.14**. `0.10` sits just above the
+  hobby ceiling with margin below that weakest real match. Re-run with the
+  threshold: only the two real entries survived, all six hobbies dropped.
+- **Test 2 (adversarial)** — a data-analyst JD, with a genuinely relevant but
+  weakly-phrased experience ("tracked sales numbers", "dug into the figures" —
+  no JD keywords) and a *hobby deliberately written to sound technical*
+  ("Fantasy Football League Manager… tracked player statistics in
+  spreadsheets, calculated weekly scores"). Result: the weak real match scored
+  **0.206** and survived; the technical-sounding hobby scored **below 0.10**
+  and was dropped. The embedding distinguished shared vocabulary from actual
+  relevance — the failure mode most at risk from a threshold, and it held.
+
+Known limits: still only two synthetic profiles. The gap between "weak real
+paraphrase" (~0.14) and "hobby noise" (~0.09) is thin, so a borderline case
+could still go either way. Erring toward recall (keep weak matches) because
+catching paraphrases keyword matching misses is the entire reason semantic
+scoring exists. Revisit as real usage data accumulates.
+
+## Schema: education + period — ✅ implemented
+
+- **`education`** is a new top-level profile array: `[{institution, degree,
+  period, description}]` (`description` optional — honors/coursework/thesis).
+  It gets **no embedding and no matching** — same call as `skills`: everyone
+  lists all their education regardless of the job, and the matching value is
+  low. It passes through to the generation prompt in full (capped at 5,
+  un-scored, un-thresholded) and the generated CV gets an `education` array.
+- **`period`** was added to `experience`, `projects`, and `education`
+  (`"2020–2023"`, `"summer 2021"`, `"3 years"` — freeform, blank when
+  unknown). It is **deliberately not part of the embedded text**: dates aren't
+  semantic content, and editing only a date shouldn't force a re-embed.
+  `attach_embeddings` in `profile-service` takes the embed-relevant field
+  subset (`title`/`company`/`description`), and the full entry — `period`
+  included — is what gets stored. `entry_text_unchanged` compares only that
+  subset, so a period-only edit reuses the cached vector.
+- Touched every layer: `profile-service` (schema + storage), `intake-service`
+  (extraction prompt + normalization — now also pulls dates into `period`
+  when stated), `tailoring-service` (both scoring paths carry `period`
+  through, `build_prompt_context` adds `education`, the generation prompt's
+  output schema gains `education` and stops hard-coding `"Not specified"` for
+  `period`), and the frontend (`backend.ts` types + `ProfileIntakePage`
+  gained period inputs and a whole Education section).
+- **AWS-verified** (see `TESTING.md` → "Schema: `education` + `period`"):
+  save/read round-trip; raw DynamoDB scan confirmed `education` items carry no
+  `embedding` key while `experience`/`projects` do; editing only `period`
+  left the stored embedding vector byte-identical (cache correctly reused);
+  `/tailor-generate` surfaced real `company`/`period` (no hallucinated
+  employer) and a correct `education` array in both `prompt_context` and
+  `generated_cv`; `/profile/parse` correctly extracted `period` and
+  `education` from free text; CloudWatch clean across all three services.
+  Verified by me against the real deployed stack, and confirmed by the user's
+  own manual pass — **done**.
+
+## Generation — ✅ implemented
+
+- `POST /tailor-generate` accepts `{job_id}` (a saved job) or
+  `{company_name, job_title, raw_description}` (ad-hoc, never persisted).
+  Identity comes from the JWT, not the request body.
+- Calls Bedrock **Claude Haiku 4.5** via the Converse API with matched
+  projects/experience, explicitly instructed not to invent employers,
+  dates, or achievements not present in the input.
+- **The prompt includes the actual raw JD text** (`raw_job_description` in
+  `prompt_context`), not a `KNOWN_SKILLS`-filtered keyword list. The original
+  design only ever gave the model `extracted_requirements` — a handful of
+  whitelist terms — never the real posting; the model was tailoring a CV
+  against a thin proxy, with no way to pick up on anything the JD asked for
+  outside that whitelist, or its actual tone/emphasis. Considered having a
+  separate LLM call summarize the JD first instead — rejected as an
+  unnecessary second Bedrock call solving a problem Claude Haiku doesn't have
+  (it can read a raw job posting directly in the same call); worth
+  reconsidering only if real JDs turn out to be long enough to strain the
+  prompt budget, which there's no evidence of yet.
+- Returns `{title, summary, experience[]}` shaped to map onto the frontend's
+  `CVData` — not yet wired into the dashboard (see Deferred).
+
+## Resolved decisions
+
+- ✅ **Graceful degradation on embedding failure** — `profile-service`'s
+  `attach_embeddings` now catches any failure from `embed_text` per-entry
+  rather than letting it propagate and fail the whole save. A failed entry is
+  stored with `embedding: None` and the save still succeeds; the response
+  includes a non-fatal `embedding_warnings` list naming which entries didn't
+  get embedded. This is self-healing, not just swallowed: `tailoring-service`
+  already falls back to embedding inline for an entry with no cached vector,
+  and `attach_embeddings`'s own reuse check treats `embedding: None` as "not
+  cached," so the next successful save automatically retries it.
+- ✅ **Entry matching for the embedding cache is name/title-based**, not
+  array-position-based (see the Embedding cache section above).
+- ✅ **`job-service` reviewed** — three fixes applied to match patterns already
+  established in `profile-service`: (1) graceful degradation on embedding
+  failure, same shape as `profile-service`'s but *without* the caching/reuse
+  machinery — `attach_embeddings` solves a problem (multiple embeddable
+  sub-entries, re-saved over time) that doesn't apply here, since a job
+  description has one embeddable field and is never updated in place (every
+  `PUT` mints a fresh `job_id`); the only real gap was that `embed_text`'s
+  failure wasn't caught at all, so a Bedrock hiccup failed the whole save. (2)
+  `email` is now normalized (`.strip().lower()`) on `PUT`, matching
+  `profile-service` — previously job descriptions could be saved with
+  inconsistent casing/whitespace relative to how the profile they belong to
+  was keyed, risking silent lookup mismatches in `tailoring-service` (which
+  takes one `email` and looks it up in both tables). (3) `company_name`/
+  `job_title`/`raw_description` are now trimmed and rejected if blank after
+  trimming, matching `profile-service`'s validation strictness.
+- ✅ **Staged, per-service AWS deployment.** Each Lambda gets deployed to real
+  AWS only after it's passed code review — not the whole stack at once just
+  because the code exists in the repo. Mechanically: a throwaway branch
+  (e.g. `test/deploy-profile-service`) branches off `develop` and trims
+  `infra-stack.ts` down to only the reviewed service(s); `develop` itself always
+  keeps the full, accurate architecture. The throwaway branch is never merged
+  back — restoring the full stack means returning to `develop`'s version of
+  `infra-stack.ts` once every service has passed review. If a bug is found
+  during real-AWS testing, the fix goes on `develop` (the real source of
+  truth), then gets pulled into the test branch with `git merge develop`
+  before redeploying.
+- ✅ **`tailoring-service`'s four review bugs, fixed together:**
+  - **Email normalized** (`.strip().lower()`) in both `handle_tailor_preview`
+    and `handle_tailor_generate`, matching `profile-service`/`job-service`.
+  - **Graceful degradation via a new `safe_embed_text` wrapper** — the three
+    previously-unguarded `embed_text` calls (the ad-hoc JD embed, the
+    saved-job fallback embed, and the per-entry safety-net embed inside
+    `score_entries_with_semantics`) all route through it now. A Bedrock
+    failure degrades to `None` instead of a 500; the rest of the pipeline
+    (`cosine_similarity`) already tolerates a `None` vector by falling back to
+    a `0.0` score.
+  - **`strip_code_fence` added before `json.loads`** in
+    `call_bedrock_for_tailoring`, defensively stripping a
+    ` ```json ... ``` ` wrapper if Claude adds one despite being told not to.
+  - **`BEDROCK_MODEL_ID` fixed to the inference-profile ID**
+    `us.anthropic.claude-haiku-4-5-20251001-v1:0` (confirmed working via a
+    real `converse` call), and the IAM policy rebuilt to grant both the
+    profile ARN and the three regional foundation-model ARNs it can route to
+    (`us-east-1`, `us-east-2`, `us-west-2` — confirmed via
+    `aws bedrock get-inference-profile`). While rebuilding this policy, also
+    split the previously-shared Bedrock grant into an embedding-only policy
+    (all three Lambdas) and a generation-only policy (`tailoring-service`
+    only) — `profile-service`/`job-service` never call Claude Haiku and
+    shouldn't have had permission to.
+  - **Verified via an execution-based local test** (monkeypatching the
+    AWS-dependent leaf calls so the real handler code — routing,
+    normalization, validation — actually runs): email normalization, the
+    degradation path, and fence-stripping all confirmed correct when actually
+    executed, not just read. `cdk synth` confirmed the resulting IAM policies
+    are scoped correctly per-service.
+- ✅ **Fixed generation fabricating an employer name (prompt-level fix, before
+  the schema fix below existed).** The system prompt in
+  `call_bedrock_for_tailoring` was updated to say `"Not specified"` should be
+  used rather than guessing, and to never write `target_role.company_name` as
+  an experience entry's `"company"` — that's the job being applied to, not
+  somewhere the candidate worked. Verified against real Bedrock, not just
+  read: redeployed and re-ran the exact case that had hallucinated
+  (`"Catalyst Cloud"` and `"Acme Corp"` both previously appeared as fabricated
+  employers) five times across both the saved-job and ad-hoc paths — zero
+  hallucinations, `"Not specified"` written consistently every time.
+- ✅ **Added `company` to the experience schema**, closing the gap the fix
+  above was working around. `profile-service`'s `experience` entries now
+  accept an optional `company` field (`normalize_entry_list(..., ["title",
+  "company", "description"])`); `tailoring-service` surfaces it through both
+  matching paths (`score_experience`'s keyword output, and
+  `score_experience_with_semantics` via a new `extra_fields` passthrough) so
+  the generation prompt has a real employer name to use when one exists,
+  rather than needing to fall back to "Not specified" for data that's
+  actually available. The system prompt was updated accordingly: use the real
+  `"company"` if given and non-empty, fall back to `"Not specified"`
+  otherwise (still never `target_role.company_name`). This also closes a
+  frontend-alignment gap noted separately: `dashboard/src/types.ts`'s
+  `ExperienceEntry` already had a `company` field — it was `profile-service`'s
+  schema that was missing it, not the frontend.
+
+  One backward-compatibility wrinkle caught and fixed while making this
+  change: `attach_embeddings`' entry-comparison (`entry_text_unchanged`) did
+  `existing_entry.get(key) == new_entry.get(key)`, which would have treated
+  every pre-existing experience entry (saved before `company` existed, so the
+  key is absent from the stored item) as "changed" the next time it's saved,
+  since a missing key (`None`) doesn't equal the new payload's `company: ""`
+  — needlessly re-embedding data that hadn't actually changed. Fixed by
+  normalizing both sides with `(x or "")` before comparing, so a missing key
+  and an empty string are treated the same; this also protects any future
+  field addition the same way.
+
+  Verified via execution-based local tests (not yet against real AWS): both
+  `profile-service`'s and `tailoring-service`'s handling of the new field,
+  and specifically the backward-compatibility fix, confirmed via direct
+  function calls with representative inputs.
+
+## Open decisions
+
+- ❓ **No dedup, no delete/archive on `job-service`.** Update-in-place is now
+  supported (an optional `job_id` on `PUT /job-description` edits the existing
+  entry — see **Future improvements #2**), but every `PUT` without a `job_id`
+  still makes a fresh UUID even for an identical resubmission, and there's no
+  `DELETE` or soft-delete like `cv-service` used to have.
+
+## Known bugs, pending fix
+
+None currently outstanding. (See Resolved decisions for the
+fabricated-employer-name fix.)
+
+## External blocker (RESOLVED)
+
+- ✅ Was: Claude Haiku 4.5 generation blocked by
+  `AccessDeniedException: ... INVALID_PAYMENT_INSTRUMENT: A valid payment
+  instrument must be provided` on this AWS account's Marketplace
+  subscription. Root cause was an expired card on the account — fixed by the
+  user directly in AWS Billing; confirmed working ~60s after the fix via a
+  direct `converse` call, then confirmed again through the actual deployed
+  `/tailor-generate` endpoint (see AWS verification status below). Kept here
+  as a record of the diagnosis process (ruled out IAM/ARN/code first) in case
+  something similar recurs.
+
+## AWS verification status
+
+✅ **The `company` field addition is now AWS-verified too**, redeployed and
+retested on top of the statuses below: resaving the existing test profile
+*without* `company` (simulating an old client) left the stored embedding
+byte-for-byte unchanged (the backward-compat fix works), resaving *with* a
+real company name correctly triggered a fresh embed, and the real value
+(`"Bittide Labs"`) flowed all the way through to a live `/tailor-generate`
+call — showing up correctly on the matching experience entry while the
+project-based entry (which genuinely has no employer) still correctly said
+`"Not specified"`, and the target company was never used as a fake employer.
+CloudWatch logs clean on both `profile-service` and `tailoring-service`.
+
+- ✅ **`profile-service`** — deployed to real AWS (account `681583877402`,
+  `us-east-1`) via the staged process above and manually verified: `PUT`/`GET
+  /profile` round-trip correctly, embeddings are real (1024-dim, confirmed by
+  reading the raw DynamoDB item) and hidden from API responses, the cache
+  reuses an unchanged entry's embedding byte-for-byte while correctly
+  re-embedding an edited one, and all error paths (404/400) behave as
+  expected. CloudWatch logs clean across every test call.
+- ✅ **`job-service`** — added to the same staged stack (`test/deploy-profile-service`,
+  now covering both services) and manually verified: `PUT`/`GET`/`GET .../list`
+  all round-trip correctly, email is normalized (`"  Allan@Example.com  "` →
+  `"allan@example.com"`, confirmed in the stored item), a real embedding is
+  stored (1024-dim, confirmed via raw DynamoDB read), blank-after-trim fields
+  are rejected (400) instead of silently stored, a nonexistent `job_id` 404s,
+  and a different email against the same `job_id` also 404s — confirming the
+  partition-key scoping is structural, not just an unchecked assumption.
+  CloudWatch logs clean across every test call. Confirmed independently via
+  the manual test plan, per the testing workflow.
+  **Update-in-place (`PUT /job-description` with `job_id`) is now AWS-verified
+  too** — user-confirmed via the manual test plan: editing a saved job through
+  the dashboard (`JobDescriptionPage`'s Edit → Save changes) correctly updates
+  `company_name`/`job_title`/`raw_description` on the existing item rather
+  than creating a new one, the embedding is reused byte-for-byte when
+  `raw_description` text is unchanged, and a changed description text
+  correctly triggers a fresh embed. See Future improvements #2.
+- ✅ **`tailoring-service`** — deployed to the same staged stack and verified.
+  `POST /tailor-preview` (keyword matching, `prompt_context` with
+  `raw_job_description`, zero Bedrock calls) and `POST /tailor-generate`
+  (both saved-job and ad-hoc paths) both work end to end. Along the way, three
+  things were found via real testing and fixed + reverified: the external
+  Marketplace/billing blocker (resolved), the fabricated-employer-name
+  hallucination (prompt fix + `company` schema field, 5/5 clean), and the
+  `MIN_SEMANTIC_SCORE = 0.10` threshold (calibrated and validated against two
+  test profiles — see "Threshold calibration" and `TESTING.md`). CloudWatch
+  logs clean throughout. Automated verification by me across all rounds; the
+  user reviewed the manual test plans and elected to move on to frontend
+  integration rather than re-run each round by hand.
+
+**Next up: frontend ↔ backend integration** — see the section below.
+
+## Bedrock usage logging — ✅ implemented
+
+Every Bedrock call site in all four Lambdas (`profile-service`,
+`job-service`, `intake-service`, `tailoring-service`) prints one structured
+`BEDROCK_USAGE {...}` log line per call, carrying the real input/output
+token counts already present in that call's own response (Titan's
+`inputTextTokenCount`, Converse's `usage.inputTokens`/`outputTokens`) rather
+than an estimate. Purely additive — no behavior change. Filter in
+CloudWatch Logs Insights with `fields @message | filter @message like
+/BEDROCK_USAGE/`. Built to answer "what does a new user cost us" without
+guessing token counts; the test runs, the resulting cost-per-user
+calculations, and the pricing caveats live in `TESTING.md`, not here.
+
+## Frontend ↔ backend integration — 🚧 in progress
+
+All backend services are deployed and verified. The old `dashboard/`
+pages (`CVBuilderPage`, `MyCVsPage`) still reference the removed `cv-service`
+(`cvApi.ts` → `/cv`, `/cv/list`) — stale, but not yet ripped out.
+
+**Profile intake flow — ✅ wired end to end.** New `dashboard/src/api/backend.ts`
+(real client for `profile-service`/`intake-service`; default URL points at the
+staged deployment, override with `VITE_API_URL`) + new `ProfileIntakePage.tsx`
+at `/profile`: sign in → paste your background as prose → `POST /profile/parse`
+→ the result renders as editable fields (name, skill tags, experience,
+projects, all add/remove-able) → correct anything → **Save** calls
+`PUT /profile`. `LoginPage` now routes here after sign-in instead of the old
+builder. Verified by driving the whole flow in a headless browser against the
+real deployed backend: a pasted paragraph parsed correctly (companies where
+named, blank where not, jazz-band hobby excluded), an edit to the name
+persisted, and a direct `GET /profile` confirmed the round-trip. Zero console
+errors. See `TESTING.md`.
+
+**Job description + tailoring flow — ✅ wired end to end.** `backend.ts`
+extended with `saveJobDescription`/`listJobDescriptions`/`generateTailoredCV`
+(and the `JobDescriptionInput`/`StoredJobDescription`/`GeneratedCV`/
+`PromptContext` types). New `JobDescriptionPage.tsx` at `/jobs`: paste
+company/title/description → `PUT /job-description` → appears in a saved-jobs
+list (`GET /job-description/list`) → **Tailor CV** on any saved job calls
+`POST /tailor-generate` and renders the generated title/summary/experience/
+education inline on that job's card. `ProfileIntakePage`'s "saved" screen now
+links forward to `/jobs`, completing the loop from the login page. Verified
+end to end in a headless browser against the real deployed backend: signed
+in → parsed+saved a profile (Nimbus Software experience, Budget Tracker
+project, State University education) → saved a Vertex Analytics job posting
+→ generated a CV that used the *real* profile data (Nimbus Software, correct
+period, State University) rather than fabricating an employer from the target
+company name → reloaded the page and confirmed the saved job list persists
+via `GET /job-description/list`. Zero console errors, zero CloudWatch errors
+across all four Lambdas. See `TESTING.md`.
+
+- ✅ **Regenerate button — added to both the job list and the CV builder.**
+  `JobDescriptionPage`'s `handleGenerate` gained a `force` param that skips
+  the cached-CV short-circuit; a ghost **Regenerate** button next to **View
+  tailored CV** calls it with `force: true`. `CVBuilderPage` gained its own
+  **Regenerate** button next to **Export PDF** that re-runs
+  `generateTailoredCV` for the currently-viewed job and overwrites the
+  cached entry via `saveGeneratedCV` (already an upsert by `jobId`, so no
+  store changes were needed). Both just re-call the existing
+  `/tailor-generate` endpoint — no backend changes. Verified manually in
+  the browser against the live deployed backend.
+
+- ✅ **CV template picker — Modern, Classic, and Embedded.** New
+  `components/templates.ts` registry (`{id, label, component}`) plus
+  `getTemplate`/`DEFAULT_TEMPLATE_ID`; `CVBuilderPage` renders a template
+  picker row above the preview, `useCVStore` gained per-CV `templateId`
+  (preserved across Regenerate) and a `setTemplate(jobId, templateId)`
+  action, and `CVPreview`/`JobDescriptionPage`'s job-list thumbnail now
+  render whichever template is chosen instead of hardcoding
+  `ModernTemplate`. `ClassicTemplate` is a deliberate placeholder stub
+  (guidance comment only, not a real design). `EmbeddedTemplate` needed
+  `CVData` to grow: `EntrySection` (shared `{id, title, org?, period?,
+  bullets}` type), `education[].coursework`, and optional
+  `projects`/`research`/`additional`/`referencesNote`. `projects`/`research`
+  are derived in `generatedCvToCVData` by splitting the merged `experience`
+  list on `company === "Not specified"` (a heuristic on the signal from the
+  matched-projects fix above, not a real backend distinction); `additional`
+  and `referencesNote` still have no generator and stay empty/fallback.
+  `education[].coursework` **does** have a real fix: the generation output
+  schema in `tailoring-service` only ever declared `{institution, degree,
+  period}` for education — no field for the `description` (coursework/
+  honors/thesis) that `education_for_prompt` was already forwarding into
+  the prompt — same class of bug as the matched-projects one, just on
+  education instead of experience. Fixed by adding `description` to the
+  output schema with an explicit "copy verbatim or leave empty, never
+  invent" instruction; `GeneratedCV.education` and `generatedCvToCVData`
+  updated to carry it through. Verified against the real deployed
+  endpoint: `generated_cv.education[0].description` now matches the
+  profile's coursework list.
+
+- ✅ **A4-aware pagination + honest multi-page PDF export.** Until now the
+  templates rendered as one endless 210mm sheet (so there was no visual hint
+  where a page would cut) and `exportPDF.ts` rasterized the *whole* sheet and
+  squashed it onto a single A4 page regardless of length. Both are fixed with
+  a small client-side fragmentation pass rather than depending on browser
+  paged-media support (which doesn't exist for arbitrary HTML):
+  - `utils/paginate.ts` measures the rendered `.cv-sheet` off-screen, walks it
+    using marker classes (`cv-sheet` / `cv-columns` / `cv-column` / `cv-flow`),
+    and splits its content into page-sized clumps of unbreakable fragments
+    (break-inside: avoid — a section/entry moves whole to the next page rather
+    than being sliced mid-text; only a unit taller than a full page gets broken
+    at its own children so nothing is silently dropped). Two-column templates
+    paginate each column independently and the results are zipped by page — the
+    Modern template's sidebar rail persists on continuation pages.
+  - `components/PaginatedCV.tsx` (wired into `CVBuilderPage` in place of the
+    raw template render) lays the template out once out of view, then clones
+    fragments into fixed 210×297mm `.cv-page` frames with a "Page N of M"
+    caption. The builder now shows exactly how many pages a CV spans and where
+    each cut falls; template switching stays instant (per-template measure).
+  - `utils/exportPDF.ts` prints each `.cv-page` frame onto its own full A4 PDF
+    page instead of stretching everything into one — so the exported PDF is
+    pixel-identical to the on-screen preview. Rasterization at 2× (~190 DPI on
+    A4) keeps multi-page exports ~10MB/page rather than ~25MB.
+  - `ModernTemplate`/`EmbeddedTemplate`/`ClassicTemplate` carry the marker
+    classes; `ModernTemplate`'s Experience/Education sections were mildly
+    restructured so entries (not whole sections) are the fragmentation
+    granularity.
+  - Self-verified with a headless browser against the local dev server (a
+    2-page Modern, a 3-page Embedded, and a 1-page "fits on A4" case): page
+    frames measured exactly 794×1123px, zero `scrollHeight` overflow on every
+    page, total text content preserved across pages, and the exported PDF's
+    `/Count` matches the on-screen page count. Final manual confirmation still
+    outstanding under the repo's testing workflow.
+
+- ✅ **Editable CV text with two-way sync between the review form and the A4
+  previews.** Every text section — name, contact, summary, skills, experience,
+  education, and the Embedded template's project/research bullets,
+  additional items, and references note — can be edited from either side and
+  both always agree:
+  - Each text node stamps a dot-path into the CV (`data-field`, e.g.
+    `experience.2.role`, `skills.0.name`, `projects.1.bullets.2`) via a small
+    `components/editable.tsx` helper (`Editable { field, value, as }`).
+    `utils/cvEdits.ts` provides `setFieldByPath`/`getFieldByPath` to read and
+    write those paths into `CVData` (numeric segments index arrays).
+  - The store gained `updateCV(jobId, updater)` (`useCVStore.ts`), which applies
+    the edit to the persisted CV with immer's `produce` and updates
+    `viewerCv` if that job is on screen, so the form and previews re-render
+    and localStorage is kept in sync on every keystroke.
+  - Left panel (`CVViewer`) is now a controlled form: each input/textarea is
+    bound to a path and dispatches `updateCV` on change. The preview pages are
+    *cloned* DOM (React only renders the off-screen measurer), so in-place
+    editing is wired imperatively in `PaginatedCV`: a delegated `input`
+    listener on the frames container reads `textContent` from the
+    `[data-field]` element being edited, reports it via a new `onEdit` prop,
+    and after the store-triggered rebuild restores the caret to the same
+    character offset (Edit-forward: the field keeps focus and the cursor never
+    jumps, even mid-string). `CVBuilderPage` routes preview edits through the
+    same `updateCV` as the form.
+  - Editable spans get a soft dashed outline on hover/focus so it's obvious
+    where you can click to type. Modern's contact items were restructured so
+    only the value (not the phone/location icon) is editable; the Embedded
+    `EntryBlock` takes a `path` prop so project/research titles, orgs, periods,
+    and bullets are all editable. Classic stays a stub, but its name/title/
+    summary are editable too.
+  - Skills also support add/remove, not just re-labeling, via the dot-path
+    helpers `removeAtPath`/`pushArrayItem` in `utils/cvEdits.ts`: an
+    "+ Add skill" button and per-skill ✕ in the left form, plus a per-skill ✕
+    on the preview pages (revealed on hover, hidden in the rasterized PDF
+    export). Removing the last skill hides the section; adding revives it.
+  - The same add/remove applies to the other list sections: experience and
+    education get "+ Add" buttons in the form and a hover ✕ on every entry
+    block in the preview, and the Embedded template's project/research entries
+    and additional items are removable from the preview too. New entries are
+    appended empty (fresh `id`), so you type straight into either panel.
+  - Self-verified with a headless browser against the local dev server (Modern
+    long + Embedded long + Classic switch): left→preview and preview→left edits
+    propagate on the same keystroke, localStorage matches, caret stays in the
+    edited field after a mid-string insert, 2/3-page pagination still holds,
+    and there were no console/page errors. Final manual confirmation still
+    outstanding under the repo's testing workflow.
+  - **Pagination hardening against live typing.** Two CSS rules in
+    `PaginatedCV` fix what typing exposed: long unbroken words used to expand
+    the flex column (a single 300+ char word ballooned the summary column to
+    2270px), which the fixed-width page then clipped and which corrupted
+    subsequent page splits once whitespace arrived. Now `[data-field]` uses
+    `overflow-wrap: anywhere` (`word-break: break-word`) and the flex
+    columns/flow containers are `min-width: 0`, so words break at the column
+    edge and the layout never outgrows the 210mm sheet. Self-verified: long
+    word wraps in place (0 overflow on both axes), and a 1.5k-word paste onto
+    a 14-entry CV repaginates to 2 pages with zero content loss.
+  - **Pagination hardening: vertical margins/padding and browser line-breaks.**
+    Two more `paginate.ts` fixes closed clipping bugs typing exposed. First,
+    the fit budget measured only border-box heights, so real vertical margins
+    and `paddingTop` (on `cv-column`s and the Embedded `cv-flow`) pushed the
+    previous entry past the page edge — the last entry on a full page got
+    clipped. `paginate.ts` now accounts for margin boxes (`flowAdvance`) and
+    column padding (`paddingTopOf`) when splitting. Second, newlines entered
+    with the browser's line-break (Enter) inserted empty block elements that
+    `textContent` read-backs silently dropped, so the store never updated, no
+    re-pagination ran, and the field grew past its fixed page frame until it
+    clipped. `PaginatedCV` now reads `innerText` (which reflects the browser's
+    own line breaks) and `Editable` renders with `white-space: pre-wrap`, so
+    newlines round-trip through the store and the pages re-flow. Self-verified
+    with a headless browser: 25 Enters into a description stored all 26
+    newlines, pages re-flowed with zero clipped fields, and long-word typing
+    still repaginates cleanly.
+  - **Optional per-skill levels (Modern template only).** `CVData.skills` went
+    from `string[]` to `{ name, level? }[]` (`SkillEntry`). The Modern
+    template's skill bar now reflects the real level — width = `level × 10%`
+    on a 1–10 scale — and is hidden entirely when `level` is unset (no more
+    decorative fake bars). Embedded/Classic are unchanged and ignore
+    `level`. The left form (`CVViewer`) got a per-skill level `<select>`
+    (`None` + 1–10); picking `None` deletes the level. Because this changed
+    the persisted schema, the store's localStorage key bumped
+    `cv_tailor_dir_v1` → `cv_tailor_dir_v2` and old cached CVs are
+    intentionally discarded (regenerate rather than migrate); `loadDir`
+    defensively normalizes any stray v2 `skills` entries. Profile-level
+    `StoredProfile.skills` stays `string[]` (backend schema) and is mapped to
+    `SkillEntry[]` in `generatedCvToCVData`, so newly generated CVs start
+    level-less. Self-verified headlessly: bars render/hide per level, setting
+    a level via the panel updates the bar, add/remove of skills keeps working,
+    all three templates render with zero clipped fields.
+  - **Fast server-free testing added:** `npm test` runs Vitest on the pure
+    dot-path edit helpers (`utils/cvEdits.ts` — `setFieldByPath` /
+    `getFieldByPath` / `removeAtPath` / `pushArrayItem`) as `cvEdits.test.ts`;
+    no dev server, no browser, ~0.5 s. Test files are excluded from the
+    `tsc` build via `tsconfig.json`. (Vitest lives outside `dashboard/
+    node_modules` in this WSL workspace because `npm install` on the
+    `/mnt/d` DrvFs mount fails on the native-binary rename; on a normal host
+    `npm i -D vitest` works.)
+
+Still to do: deciding what happens to the stale
+`CVBuilderPage`/`MyCVsPage`/`cvApi.ts`, and (smaller) `/tailor-preview`
+(the free keyword-only route) isn't wired into the frontend anywhere yet —
+only the paid `/tailor-generate` path is.
+
+**Free-text experience → the profile-service JSON schema — ✅ backend built and
+tested against real AWS.** Two runs (a rambling casual paragraph, and a sparse
+self-taught description): companies extracted correctly when named, left empty
+when not (no guessed employers), a stated hobby correctly excluded, and a
+description with no formal role correctly produced an empty `experience` list
+rather than fabricating one. One minor note: the model will lightly *infer* a
+job title from described work ("Frontend Developer" from "doing frontend React
+work") — a synthesis, not a fabrication of facts, and the frontend review step
+is there to catch it. See `TESTING.md`. The product direction (and the
+`FreeformDemoPage`
+prototype) is that a user pastes/types their background as prose, not fills in
+a structured form — but `PUT /profile` needs `{skills[], projects[{name,
+description}], experience[{title, company?, description}]}`. A new
+`intake-service` Lambda (`POST /profile/parse`) does the transformation with
+one Claude call. Chosen shape:
+- **Parse, don't save.** Returns the structured extraction unsaved; the
+  frontend renders it as editable fields, the user corrects anything wrong,
+  *then* the frontend calls the existing `PUT /profile`. The human review step
+  is the real defense against extraction hallucination — same concern we
+  fought in the generation direction.
+- **Its own Lambda, not a route on `profile-service` or `tailoring-service`.**
+  Keeps each service's job legible, and its IAM is minimal — Bedrock
+  generation model only, zero DynamoDB (it never saves).
+- Output is coerced to exactly the `PUT /profile` schema (empty entries
+  dropped, trimmed, `company` left blank when no employer named).
+
+## Voice interview agent — 🚧 decided, not yet built
+
+Full spec (product decisions, architecture, phased interview flow, constraints,
+deferred items, verification approach) tracked in **`VOICE_INTERVIEW.md`**. Status
+markers update here; design detail lives in that file.
+
+## Future improvements — 📝 noted, not started
+
+User-proposed, captured here for later. Not designed or scoped yet.
+
+1. **Profile updates should merge, not overwrite.** `PUT /profile` today is a
+   full replace — `normalize_profile_payload` takes exactly what's in the
+   request body and that becomes the whole item (see `save_profile` in
+   `profile-service`). `ProfileIntakePage` compounds this on the frontend
+   side too: it always starts from a blank form (`stage: 'paste'`), so
+   there's no way to see what's already saved before adding to it — a user
+   has to re-paste their entire background to add one new job. Fix likely
+   needs both ends: the frontend should load the existing saved profile into
+   the review form (pre-filled, editable) instead of starting blank, and/or
+   `profile-service` should support adding a single entry without requiring
+   the full profile in the request. Worth deciding whether "merge" means
+   append-only (never lose data unless explicitly removed) or still
+   full-replace-but-easier-to-edit (pre-filled form, same overwrite
+   semantics underneath) — those are different amounts of backend work.
+2. **Saved job list needs delete.** Edit is now built: `PUT /job-description`
+   accepts an optional `job_id` and updates the existing entry in place
+   (re-embedding `raw_description`'s vector only when the description text
+   actually changes, so a title/company-only edit doesn't burn a Bedrock call —
+   mirrored on the dashboard by `Edit` → `Save changes` on any saved job).
+   What's still missing is `DELETE /job-description` — there's no way to remove
+   a saved job from the list yet.
+3. **Reduce what's sent to the LLM — cost and security.** Two angles worth
+   separating: (a) *cost* — trimming prompt size (e.g. capping
+   `raw_job_description` length before it hits `/tailor-generate`, not just
+   `MAX_RAW_TEXT_CHARS` on the intake side) and avoiding redundant context
+   across calls; (b) *security* — right now full profile text (real name,
+   real employers, potentially other PII) goes into every Bedrock prompt.
+   Worth considering what's actually necessary to send vs. what's
+   convenient, and whether anything should be redacted/minimized before it
+   leaves the account boundary into the model call.
+4. **PDF export needs to be ATS-friendly.** Already tracked below under
+   "Deferred / explicitly out of scope" — `exportPDF.ts` currently rasterizes
+   via `html2canvas` into an image-in-a-PDF with no extractable text, which
+   defeats ATS parsing regardless of how good the generated content is.
+   Restating here because it's now specifically tied to the *generated* CV
+   from `/tailor-generate`, not just the manual builder.
+5. **Cover letter generation.** A new capability, not just a fix — likely a
+   new Bedrock-backed route (e.g. `POST /cover-letter-generate`) that takes
+   the same `{job_id}` shape as `/tailor-generate` and reuses the same
+   matched-profile-data + anti-hallucination prompt discipline established
+   there, producing a tailored cover letter instead of (or alongside) the CV
+   sections.
+
+## Deferred / explicitly out of scope
+
+- ⏸ **ATS-safe export.** `exportPDF.ts` rasterizes the CV via `html2canvas` into a
+  PNG-in-a-PDF (no extractable text), and `ModernTemplate.tsx` is two-column —
+  both defeat "ATS-friendly" regardless of AI content. (Since the A4-pagination
+  work above, the file is at least honest about page breaks — one real A4 page
+  per on-screen frame, no stretching — but it's still an image-in-a-PDF, so
+  `text()` extraction in a real ATS will still come back empty. Getting actual
+  selectable text means generating the PDF by writing vector/text primitives
+  instead of a screenshot — that's the remaining gap.) Now tracked with full
+  context under **Future improvements #4**.
+- ⏸ **CV persistence.** Dropped along with `cv-service`. No backend for
+  saving/loading a generated or edited CV until the dashboard redesign defines a
+  new approach.
+- 🚧 **Frontend wiring** — now the active piece of work (moved out of deferred).
+  See "Frontend ↔ backend integration" above.
+- ⏸ **Profile schema gap (partially closed).** `education` and per-entry
+  `period` were added (see "Schema: education + period" below). Still missing
+  vs a full `CVData`: `phone`/`location`/`website`/`linkedin` and a top-level
+  `title` — `generated_cv` still leaves those to be filled in manually. (A
+  related but distinct concern — *how* a profile gets updated, not *what
+  fields* it has — is Future improvement #1.)
+
+## Verification checklist (once deployed)
+
+1. `cdk diff` / `cdk synth` — confirm no VPC/RDS resources, 2 DynamoDB tables, 3
+   Lambdas, 7 routes. *(Done via `cdk synth` against the current code.)*
+2. `cdk deploy` — requires Bedrock model access enabled in the console for both
+   Claude Haiku 4.5 and Titan Embeddings in the target region first.
+3. Save the same profile twice with one entry's text unchanged — confirm that
+   entry's `embedding` is identical across both saves (not redundantly
+   re-embedded), while a genuinely edited entry gets a new one.
+4. `PUT /job-description` → confirm the response returns a UUID `job_id`.
+5. `GET /job-description/list` (no query params — identity comes from the JWT)
+   → confirm it lists only that user's saved jobs.
+6. `POST /tailor-generate` ad-hoc (no `job_id`) and saved-job (`{job_id}`)
+   paths both return a non-empty `generated_cv`.
+7. A profile entry worded as a paraphrase (not a literal keyword match) still
+   surfaces in `matched_projects`/`matched_experiences` under `/tailor-generate`.
+8. `/cv` and `/cv/list` routes return route-not-found (404), not 405 — confirms
+   they're actually gone, not just erroring.

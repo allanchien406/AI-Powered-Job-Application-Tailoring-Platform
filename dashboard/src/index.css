@@ -1,0 +1,38 @@
+@import 'tailwindcss';
+
+@theme {
+  /* surfaces & lines */
+  --color-paper: #f0ede6;
+  --color-sand: #e6e1d7;
+  --color-sand-dark: #ded7c9;
+  --color-cream: #f3efe7;
+  --color-eggshell: #fbfaf7;
+
+  /* brand & text */
+  --color-forest: #2c4a3e;
+  --color-ink: #1a1a18;
+  --color-ink-soft: #6b665c;
+  --color-ink-muted: #9e9a91;
+
+  /* notice tones */
+  --color-note-error-bg: #f7e9e5;
+  --color-note-error-border: #e6c3ba;
+  --color-note-error-text: #8a3a2f;
+  --color-note-info-bg: #edf3f0;
+  --color-note-info-border: #cfe0d8;
+  --color-note-info-text: #3a5a4e;
+  --color-note-success-bg: #e9f4ec;
+  --color-note-success-border: #c4e2cd;
+  --color-note-success-text: #2e5d3a;
+
+  /* type */
+  --font-body: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'DM Serif Display', ui-serif, Georgia, serif;
+
+  /* elevation */
+  --shadow-card: 0 8px 30px rgba(30, 22, 10, 0.08);
+}
+
+body {
+  @apply bg-paper font-body text-ink antialiased;
+}

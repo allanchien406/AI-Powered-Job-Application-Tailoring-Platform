@@ -1,239 +1,145 @@
 # AI-Powered Job Application Tailoring Platform
 
-An intelligent web application that helps job seekers generate tailored CVs and cover letters for specific roles using their stored experience, projects, skills, and certifications.
+An AI-powered web app that helps job seekers produce a tailored CV for each role they apply to, grounded in their real experience.
 
-Instead of rewriting application documents from scratch for every job, users enter their background once into the platform. The app then analyzes a job description, matches the most relevant experience from the database, and generates customized application materials grounded in the user’s real information.
+You describe your background once, in plain prose. The app turns it into a structured profile. For each job posting you save, it picks out the parts of your history that are semantically relevant and has Claude write a tailored CV from only that real data. Claude is told not to invent employers, dates, or achievements. You then edit the CV in the browser, choose a template, and export it to PDF.
 
+> **Docs map:** this README is the product overview.
+> The current architecture and design decisions live in [`PLAN.md`](PLAN.md). Route-level reference is in [`API.md`](API.md), and what was actually run against real AWS is in [`TESTING.md`](TESTING.md).
+> Forward-looking plans: [`PRODUCTION.md`](PRODUCTION.md), [`MONETISATION.md`](MONETISATION.md), [`VOICE_INTERVIEW.md`](VOICE_INTERVIEW.md).
 
 ---
 
 ## Problem
 
-Applying for jobs is repetitive and time-consuming.
-
-Most candidates need to:
+Applying for jobs is repetitive and time-consuming. Most candidates need to:
 
 - rewrite the same experience for different roles
-
 - adjust CVs to match job descriptions
-
 - create new cover letters for each company
-
 - keep track of which application version was sent where
 
-This process is especially painful for students, graduates, and early-career tech professionals who may be applying to many roles at once.
-
----
+This is especially painful for students, graduates, and early-career tech professionals applying to many roles at once.
 
 ## Solution
 
-To create an AI-powered career document generation system that uses structured user experience data to produce customized, role-specific application materials.
+An AI career-document system that stores a candidate's experience as structured data. It matches that data against each job description by meaning, not just keywords, and generates role-specific application materials from what the candidate has actually done.
 
 ---
 
-## Architecture Diagram
+## How it works
 
+1. **Sign in.** Cognito Hosted UI handles sign-in. Every API call carries a Cognito JWT.
+2. **Describe yourself.** Paste your background as free text. `POST /profile/parse` uses Claude to extract it into structured skills, experience, projects, and education. You review and correct the result, then save it (`PUT /profile`).
+3. **Embed on write.** Each project and experience entry is embedded once with Titan Text Embeddings V2 when it's saved, and the vector is cached. Unchanged entries are never re-embedded or rewritten.
+4. **Save a job.** Paste a job posting (`PUT /job-description`). Its description is embedded once too.
+5. **Tailor.** `POST /tailor-generate` ranks your entries by cosine similarity to the job, drops noise below a calibrated threshold (`0.10`), and keeps the top matches. It then sends those matches plus the raw job text to **Claude Haiku 4.5** on Bedrock, which returns a structured CV.
+6. **Edit and export.** In the CV builder you can edit text in either the form or the A4 preview (the two stay in sync). You can switch between the Modern, Classic, and Embedded templates, check where page breaks fall, and export a multi-page PDF. CVs autosave to your account.
 
+## Architecture
 
----
+Serverless, defined in AWS CDK (`infra/`). It runs five Python Lambdas behind one API Gateway HTTP API, with every route behind a Cognito JWT authorizer. Storage is DynamoDB. There's no VPC and no RDS.
 
-## Core Features
+```mermaid
+flowchart LR
+  UI["React dashboard<br/>(Vite + Amplify)"] -->|JWT| Cognito["Cognito<br/>Hosted UI"]
+  UI -->|"Bearer JWT"| API["API Gateway HTTP API<br/>JWT authorizer"]
 
-### MVP Features
+  API -->|"/profile"| PS[profile-service]
+  API -->|"/profile/parse"| IS[intake-service]
+  API -->|"/job-description(/list)"| JS[job-service]
+  API -->|"/tailor-preview, /tailor-generate"| TS[tailoring-service]
+  API -->|"/cv, /cv/list"| CS[cv-service]
 
+  PS --> PT[(ProfilesTableV2)]
+  JS --> JT[(JobDescriptionsTable)]
+  TS --> PT
+  TS --> JT
+  CS --> CT[(CvsTable)]
 
-- User profile creation and editing
-
-- Structured storage for:
-
-  - personal summary
-
-  - education
-
-  - work experience
-
-  - technical skills
-
-  - projects
-
-  - certifications
-
-- Job description input
-
-- AI-powered job requirement extraction
-
-- Relevance matching between job description and user profile
-
-- Tailored CV generation
-
-- Tailored cover letter generation
-
-- Export generated documents
-
-![MVP Architecture Diagram](Image/MVP-Archeticture-planing.png)
-
-
-1. Profile service Lambda
-   1. Create user profile
-   2. update profile
-   3. Read and write to RDS
-2. Job tailoring Lambda
-   1. receive job description
-   2. fetch user profile form DB
-   3. call Bedrock
-   4. CV/Cover letter generate
-   5. return result
-
-#### Step-1: Fundation setup with CDK
-Use CDK to create apigateway and lambda LaC then test it
-
-- remember dont delete the S3 bucket made form the bootstrap otherwise u need to delete the CDKToolkit stack and bootstrap again
-
-```
-> curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile"
-{"message": "Profile service API is running"}%  
-```
-this show that the apigateway and lambda is successfully running!
-
-- i have done some update for the stack code, so now the lambda code is not use 
-Code.formInline but Code.fromAsset, and it turn out that the cloudformation will put the lambda in the zip and in a default bucket
-
-```
-ProfileServiceHandler4430D52F:
-    Type: AWS::Lambda::Function
-    Properties:
-      Code:
-        S3Bucket:
-          Fn::Sub: cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}
-        S3Key: d0ec76d1f190c9fdca3600e82a628d9b7eabbee7ca98041fa28f10fe43b79ddb.zip
-      Handler: index.handler
-```
-- alright i make the lambda took json data and echo back
-
-```
-curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "full_name": "Allan Chien",
-    "email": "allan@example.com",
-    "skills": ["AWS", "Python", "Docker"],
-    "projects": [
-      {
-        "name": "Stock Market Real-Time Data Analytics Pipeline on AWS"
-      }
-    ]
-  }'
-{"message": "Profile received successfully", "received_profile": {"full_name": "Allan Chien", "email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "projects": [{"name": "Stock Market Real-Time Data Analytics Pipeline on AWS"}]}}%   
-```
-#### Step-2: RDS implement
-![MVP Architecture Diagram](Image/MVP-Archeticture-Step2.png)
-
-Implement the architecture using CDK
-##### 2.1: Implemment lambda profile service backend logic
-
- Now the Python code should move from echo test handler to real profile-service backend logic.
-
-- remember to install necessary package for example 
-```
-import psycopg
-```
-with 
-```
-cd infra/lambda/profile-service
-pip install --target . 'psycopg[binary]'
+  PS -. embed .-> Titan["Bedrock<br/>Titan Embeddings V2"]
+  JS -. embed .-> Titan
+  TS -. embed fallback .-> Titan
+  IS -. extract .-> Haiku["Bedrock<br/>Claude Haiku 4.5"]
+  TS -. generate .-> Haiku
 ```
 
-this is because  AWS Lambda does not come with psycopg preinstalled.
+| Service | Routes | Storage | Bedrock |
+|---|---|---|---|
+| `profile-service` | `GET/PUT /profile` | `ProfilesTableV2` (one `PROFILE` item + one item per project/experience) | Titan embeddings |
+| `intake-service` | `POST /profile/parse` | none (parse only, never saves) | Claude Haiku 4.5 |
+| `job-service` | `GET/PUT /job-description`, `GET /job-description/list` | `JobDescriptionsTable` | Titan embeddings |
+| `tailoring-service` | `POST /tailor-preview` (keyword-only, free), `POST /tailor-generate` | reads both tables above | Titan (fallback) + Claude Haiku 4.5 |
+| `cv-service` | `PUT/GET/DELETE /cv`, `GET /cv/list` | `CvsTable` | none (CRUD only) |
 
-- okay lambda funcion erro form cloudwatch log, this is probally issue with psycopg
-```
-[ERROR] Runtime.ImportModuleError: Unable to import module 'index': no pq wrapper available.
-Attempts made:
-- couldn't import psycopg 'c' implementation: No module named 'psycopg_c'
-- couldn't import psycopg 'binary' implementation: cannot import name 'pq' from 'psycopg_binary' (/var/task/psycopg_binary/__init__.py)
-- couldn't import psycopg 'python' implementation: libpq library not found
-Traceback (most recent call last):
-```
-need to fix it
+All tables are partitioned by `user_id`, which is the verified Cognito `sub`. A user can only ever read their own partition. For the full rationale (why no RAG or S3, why DynamoDB rather than RDS, embedding-cache rules, threshold calibration), see [`PLAN.md`](PLAN.md).
 
-now I have try 
-```
-import pg8000
-```
-but I think the problem is Lambda cannot reach Secrets Manager from the isolated subnet, so i probally need a redesign of the architecture
+### Tech stack
 
-![MVP Architecture Diagram](Image/MVP-Archeticture-Step2.1.png)
+- **Backend:** AWS CDK (TypeScript), AWS Lambda (Python 3.12), API Gateway HTTP API, DynamoDB, Cognito, Amazon Bedrock (Claude Haiku 4.5 via the Converse API, Titan Text Embeddings V2)
+- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, Zustand + immer, AWS Amplify (auth), html2canvas + jsPDF (export), Vitest
 
-so use an enterface endpoint to connect the instances in the private subnet to the public aws service
+### Repo layout
 
 ```
-> curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "full_name": "Allan Chien",
-    "email": "allan@example.com",
-    "skills": ["AWS", "Python", "Docker"]
-  }'
-
-{"message": "Profile saved successfully", "profile_id": 1, "email": "allan@example.com"}%                                                                             
-```
-ok now the implemntion is good
-Now i need to find a way to connet to the RDS to verify data table 
-so i have sucessfully add a GET endpoint and verify data in RDS
-```
-> curl "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/profile?email=allan@example.com"
-{"profile_id": 1, "email": "allan@example.com", "full_name": "Allan Chien", "profile_data": {"email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "full_name": "Allan Chien"}}%                                 
+infra/                CDK app (infra/lib/infra-stack.ts) + Lambda sources
+  lambda/profile-service/
+  lambda/intake-service/
+  lambda/job-service/
+  lambda/tailoring-service/
+  lambda/cv-service/
+dashboard/            React + Vite frontend
+  src/pages/          Login, AuthCallback, ProfileIntake (/profile), JobDescription (/jobs), CVBuilder (/builder)
+  src/api/backend.ts  typed client for every route
+  src/components/     CV templates, PaginatedCV, editable fields
+docs/superpowers/     design specs and implementation plans
+postman/              Postman collection for the API
+Image/                architecture diagrams from the original (RDS-era) design
 ```
 
-##### 2.2: Add job description endpoint
-```
-> curl -X PUT "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/job-description" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "company_name": "Catalyst Cloud",
-    "job_title": "Junior DevOps Engineer",
-    "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."
-  }'
-{"message": "Job description saved successfully", "job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer"}%   
+## Running it
 
- curl "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/job-description?job_id=1"
-{"job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer", "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."}%     
-```
+**Prerequisites:** an AWS account with Bedrock model access enabled in `us-east-1` for both Claude Haiku 4.5 and Titan Text Embeddings V2. You'll also need Node.js and the AWS CDK CLI.
 
+```bash
+# Deploy the backend
+cd infra
+npm install
+npx cdk deploy        # outputs the API URL and Cognito UserPool/Client/Domain
 
-#### Step-3: AI service implemet 
-##### 3.1: Add tailoring Lambda
-1. get email and job_id
-2. read profile row
-3. read job description row
-4. extract requirements from raw_description
-5. score profile skills/projects
-6. return matched context
-
-```
-curl -X POST "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/tailor-preview" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "allan@example.com",
-    "job_id": 1
-  }'
-{"message": "Tailor preview data loaded successfully", "email": "allan@example.com", "job_id": 1, "profile": {"profile_id": 1, "email": "allan@example.com", "full_name": "Allan Chien", "profile_data": {"email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "full_name": "Allan Chien"}}, "job_description": {"job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer", "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."}, "extracted_requirements": ["aws", "linux", "ci/cd"]}%                                                                                                
-```
-now i need ot do 5. and 6.
-
-```
- curl -X POST "https://kbmowaael3.execute-api.us-east-1.amazonaws.com/tailor-preview" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "allan@example.com",
-    "job_id": 1
-  }'
-{"message": "Tailor preview data loaded successfully", "email": "allan@example.com", "job_id": 1, "profile": {"profile_id": 1, "email": "allan@example.com", "full_name": "Allan Chien", "profile_data": {"email": "allan@example.com", "skills": ["AWS", "Python", "Docker"], "projects": [{"name": "2048 CI/CD Project", "description": "Built a CI/CD pipeline using AWS CodePipeline, ECS, and ECR."}], "full_name": "Allan Chien", "experience": [{"title": "Research Engineer", "description": "Worked on Bittide protocol implementation."}]}}, "job_description": {"job_id": 1, "company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer", "raw_description": "We are looking for someone with AWS, Linux, CI/CD..."}, "extracted_requirements": ["aws", "linux", "ci/cd"], "matched_skills": ["aws"], "matched_projects": [{"name": "2048 CI/CD Project", "description": "Built a CI/CD pipeline using AWS CodePipeline, ECS, and ECR.", "score": 10, "matched_terms": ["ci/cd", "aws"]}], "matched_experiences": [], "prompt_context": {"candidate": {"full_name": "Allan Chien", "email": "allan@example.com"}, "target_role": {"company_name": "Catalyst Cloud", "job_title": "Junior DevOps Engineer"}, "job_requirements": ["aws", "linux", "ci/cd"], "matched_skills": ["aws"], "matched_projects": [{"name": "2048 CI/CD Project", "description": "Built a CI/CD pipeline using AWS CodePipeline, ECS, and ECR.", "score": 10, "matched_terms": ["ci/cd", "aws"]}], "matched_experiences": []}}%                
+# Run the dashboard
+cd ../dashboard
+npm install
+# dashboard/.env.local — values from the cdk deploy outputs
+#   VITE_API_URL=<api url>
+#   VITE_COGNITO_USER_POOL_ID=<UserPoolId>
+#   VITE_COGNITO_CLIENT_ID=<UserPoolClientId>
+#   VITE_COGNITO_DOMAIN=<UserPoolDomain>
+npm run dev           # http://localhost:5173 (the Cognito callback URL)
+npm test              # Vitest unit tests (no server needed)
 ```
 
+## Status
 
---- 
+**Built and verified against real AWS:**
+- Cognito authentication, with identity taken from the JWT `sub`
+- Free-text profile intake
+- The multi-item `ProfilesTableV2` schema
+- Saving and editing job descriptions
+- Semantic matching with a calibrated threshold
+- CV generation with Claude Haiku 4.5
+- Bedrock cost logging (about $0.002–$0.008 per new user)
 
-## Phase 2
+**Built, with verification still pending:**
+- CV persistence (`cv-service` + autosave)
+- Multi-page A4 pagination and PDF export
+- Two-way editable CV text
 
-- 
+**Next up:**
+- Delete for saved jobs
+- Profile edits that merge rather than overwrite
+- ATS-friendly text-based PDF export
+- Cover letter generation
+- A voice interview agent
+
+The authoritative, up-to-date tracker is [`PLAN.md`](PLAN.md).

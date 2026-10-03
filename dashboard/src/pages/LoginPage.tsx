@@ -1,68 +1,54 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useCVStore } from '../store/useCVStore';
-import { Button, Input, Field } from '../components/ui';
+import { getCurrentUser, signInWithRedirect } from 'aws-amplify/auth';
+import { Button } from '../components/ui';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
-  const login = useCVStore((state) => state.login);
-  const storedEmail = useCVStore((state) => state.email);
-  const [email, setEmail] = useState(storedEmail);
+  const [checkingSession, setCheckingSession] = useState(true);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim()) return;
-    login(email.trim().toLowerCase());
-    navigate('/builder');
-  };
+  useEffect(() => {
+    let active = true;
+    getCurrentUser()
+      .then(() => {
+        if (active) navigate('/profile', { replace: true });
+      })
+      .catch(() => {
+        if (active) setCheckingSession(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [navigate]);
+
+  if (checkingSession) {
+    return <div className="min-h-screen bg-paper" />;
+  }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: '#f0ede6',
-      }}
-    >
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          background: '#fff',
-          padding: '40px',
-          borderRadius: '16px',
-          border: '1px solid #e6e1d7',
-          boxShadow: '0 8px 30px rgba(30, 22, 10, 0.08)',
-          width: '360px',
-        }}
-      >
-        <h1
-          style={{
-            fontFamily: "'DM Serif Display', serif",
-            fontSize: '28px',
-            margin: '0 0 24px',
-            color: '#1a1a18',
-          }}
-        >
-          CV Builder
-        </h1>
-        <Field label="Email address">
-          <Input
-            type="email"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </Field>
+    <div className="flex min-h-screen items-center justify-center bg-paper">
+      <div className="w-[360px] rounded-2xl border border-sand bg-white p-10 text-center shadow-card">
+        <h1 className="mb-2 mt-0 font-display text-[28px] text-ink">CV Tailor</h1>
+        <p className="mb-6 text-xs leading-normal text-ink-soft">
+          Paste your background once, save the jobs you're applying for, and get a CV tailored to
+          each one.
+        </p>
         <Button
-          type="submit"
-          style={{ width: '100%', padding: '10px', fontSize: '14px', marginBottom: 0 }}
+          onClick={() => signInWithRedirect()}
+          className="mb-3 w-full px-2.5 py-2.5 text-sm"
         >
-          Get Started
+          Sign in / Sign up
         </Button>
-      </form>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => navigate('/demo')}
+          className="w-full px-2.5 py-2.5 text-[13px]"
+        >
+          See the offline demo (fake data) →
+        </Button>
+      </div>
     </div>
   );
 };
