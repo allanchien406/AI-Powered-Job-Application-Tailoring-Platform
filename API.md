@@ -2,7 +2,7 @@
 
 Every route currently defined in `infra/lib/infra-stack.ts`, grouped by the
 Lambda that serves it. This tracks **what exists**, not design rationale (see
-`PLAN.md` for that) or build history (see `README.md`).
+`PLAN.md` for that) or the product overview (see `README.md`).
 
 **Review status legend:** ✅ reviewed together and fixed up · 👀 written, not
 yet reviewed — treat as unverified until it's been gone through.

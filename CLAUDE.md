@@ -15,8 +15,8 @@
 ## Design documentation
 
 - `PLAN.md` (repo root) is the living record of the app's current architecture
-  and design decisions — distinct from `README.md`, which stays a retrospective
-  build log. Don't merge the two.
+  and design decisions — distinct from `README.md`, which is a short product overview
+  (no build log) that links to `PLAN.md`. Don't merge the two.
 - Any time a design or architecture decision changes — schema, data flow,
   service boundaries, storage choice, matching/generation approach, scope
   additions or cuts — update `PLAN.md` as part of that same change, not as an

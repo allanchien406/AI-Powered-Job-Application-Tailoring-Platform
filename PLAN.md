@@ -1,7 +1,7 @@
 # Current plan: DynamoDB migration + semantic tailoring + Bedrock CV generation
 
 This tracks the architecture direction currently being implemented, separate from
-`README.md`'s retrospective build log. Status markers: ✅ done · 🚧 decided, not yet
+`README.md`'s product overview. Status markers: ✅ done · 🚧 decided, not yet
 built · ❓ open decision · ⏸ deferred.
 
 ## Why this direction
